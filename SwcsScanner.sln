@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "backend", "backend", "{4F5DF6E2-4B4E-4B2F-B82E-B777C6B35AC7}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{1FE45719-09BC-41FC-9C55-EC9F25C61480}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SwcsScanner.Api", "backend\src\SwcsScanner.Api\SwcsScanner.Api.csproj", "{3274F86D-080B-4273-9C93-154EADE706BB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{4B8FD4D2-8EC7-4CE4-95EB-DA5DDC110FBB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SwcsScanner.Api.Tests", "backend\tests\SwcsScanner.Api.Tests\SwcsScanner.Api.Tests.csproj", "{2B185DBF-6674-4267-9856-FB53B8C21B68}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3274F86D-080B-4273-9C93-154EADE706BB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3274F86D-080B-4273-9C93-154EADE706BB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3274F86D-080B-4273-9C93-154EADE706BB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3274F86D-080B-4273-9C93-154EADE706BB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2B185DBF-6674-4267-9856-FB53B8C21B68}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2B185DBF-6674-4267-9856-FB53B8C21B68}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2B185DBF-6674-4267-9856-FB53B8C21B68}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2B185DBF-6674-4267-9856-FB53B8C21B68}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{1FE45719-09BC-41FC-9C55-EC9F25C61480} = {4F5DF6E2-4B4E-4B2F-B82E-B777C6B35AC7}
+		{3274F86D-080B-4273-9C93-154EADE706BB} = {1FE45719-09BC-41FC-9C55-EC9F25C61480}
+		{4B8FD4D2-8EC7-4CE4-95EB-DA5DDC110FBB} = {4F5DF6E2-4B4E-4B2F-B82E-B777C6B35AC7}
+		{2B185DBF-6674-4267-9856-FB53B8C21B68} = {4B8FD4D2-8EC7-4CE4-95EB-DA5DDC110FBB}
+	EndGlobalSection
+EndGlobal
