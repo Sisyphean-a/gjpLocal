@@ -29,20 +29,44 @@ public sealed class ProductLookupService : IProductLookupService
         }
 
         var schema = await _repository.GetSchemaSnapshotAsync(cancellationToken);
-        var priceField = PickFirstExistingField(_options.PriceFields, schema.Columns);
-        if (priceField is null)
+        
+        string? priceField = null;
+        if (string.IsNullOrEmpty(_options.PriceTable))
         {
-            throw new InvalidOperationException($"在 {_options.ProductTable} 中未找到任何可用价格字段。");
+            priceField = PickFirstExistingField(_options.PriceFields, schema.Columns);
+            if (priceField is null)
+            {
+                throw new InvalidOperationException($"在 {_options.ProductTable} 中未找到任何可用价格字段。");
+            }
+        }
+
+        var specificationField = schema.Columns.Contains(_options.SpecificationField)
+            ? _options.SpecificationField
+            : _options.SpecificationField;
+
+        if (!string.IsNullOrEmpty(_options.BarcodeTable))
+        {
+            var row = await _repository.LookupByFieldAsync(
+                trimmedBarcode,
+                string.Empty,
+                priceField,
+                specificationField,
+                cancellationToken);
+
+            if (row is not null)
+            {
+                return new ProductLookupResult(
+                    row.ProductName,
+                    row.Specification ?? string.Empty,
+                    row.Price,
+                    "BarcodeTable");
+            }
         }
 
         var availableBarcodeFields = _options.BarcodeFields
             .Where(field => schema.Columns.Contains(field))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-
-        var specificationField = schema.Columns.Contains(_options.SpecificationField)
-            ? _options.SpecificationField
-            : availableBarcodeFields.FirstOrDefault() ?? _options.SpecificationField;
 
         foreach (var barcodeField in availableBarcodeFields)
         {

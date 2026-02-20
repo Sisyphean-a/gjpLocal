@@ -11,6 +11,11 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
     private static readonly Regex IdentifierRegex = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
     private readonly string _connectionString;
     private readonly string _quotedProductTable;
+    private readonly string? _quotedBarcodeTable;
+    private readonly string? _quotedBarcodeColumn;
+    private readonly string? _quotedPriceTable;
+    private readonly string? _quotedPriceColumn;
+    private readonly string _productNameField;
     private readonly SwcsOptions _options;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
 
@@ -25,6 +30,11 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         _connectionString = configuration.GetConnectionString("SwcsReadonly")
                             ?? throw new InvalidOperationException("缺少连接字符串 ConnectionStrings:SwcsReadonly。");
         _quotedProductTable = QuoteTableName(_options.ProductTable);
+        _quotedBarcodeTable = string.IsNullOrEmpty(_options.BarcodeTable) ? null : QuoteTableName(_options.BarcodeTable);
+        _quotedBarcodeColumn = string.IsNullOrEmpty(_options.BarcodeColumn) ? null : QuoteIdentifier(_options.BarcodeColumn);
+        _quotedPriceTable = string.IsNullOrEmpty(_options.PriceTable) ? null : QuoteTableName(_options.PriceTable);
+        _quotedPriceColumn = string.IsNullOrEmpty(_options.PriceColumn) ? null : QuoteIdentifier(_options.PriceColumn);
+        _productNameField = QuoteIdentifier(_options.ProductNameField);
     }
 
     public async Task<SwcsSchemaSnapshot> GetSchemaSnapshotAsync(CancellationToken cancellationToken)
@@ -90,18 +100,71 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         string specificationField,
         CancellationToken cancellationToken)
     {
+        if (_quotedBarcodeTable is not null && _quotedBarcodeColumn is not null)
+        {
+            return await LookupFromBarcodeTableAsync(barcode, priceField, specificationField, cancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(barcodeField))
+        {
+            return null;
+        }
+
         var barcodeColumn = QuoteIdentifier(barcodeField);
         var priceColumn = QuoteIdentifier(priceField);
         var specificationColumn = QuoteIdentifier(specificationField);
 
         var sql = $"""
             SELECT TOP (1)
-                p.FullName AS ProductName,
-                TRY_CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
-                TRY_CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
+                p.{_productNameField} AS ProductName,
+                CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
+                CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
             FROM {_quotedProductTable} AS p
             WHERE p.{barcodeColumn} = @Barcode;
             """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
+            sql,
+            new { Barcode = barcode },
+            cancellationToken: cancellationToken));
+    }
+
+    private async Task<DbProductLookupRow?> LookupFromBarcodeTableAsync(
+        string barcode,
+        string priceField,
+        string specificationField,
+        CancellationToken cancellationToken)
+    {
+        var specificationColumn = QuoteIdentifier(specificationField);
+
+        string sql;
+        if (_quotedPriceTable is not null && _quotedPriceColumn is not null)
+        {
+            sql = $"""
+                SELECT TOP (1)
+                    p.{_productNameField} AS ProductName,
+                    CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
+                    CAST(pr.{_quotedPriceColumn} AS DECIMAL(18, 2)) AS Price
+                FROM {_quotedBarcodeTable} AS bc
+                INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
+                INNER JOIN {_quotedPriceTable} AS pr ON p.ptypeid = pr.PTypeId
+                WHERE bc.{_quotedBarcodeColumn} = @Barcode;
+                """;
+        }
+        else
+        {
+            var priceColumn = QuoteIdentifier(priceField);
+            sql = $"""
+                SELECT TOP (1)
+                    p.{_productNameField} AS ProductName,
+                    CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
+                    CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
+                FROM {_quotedBarcodeTable} AS bc
+                INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
+                WHERE bc.{_quotedBarcodeColumn} = @Barcode;
+                """;
+        }
 
         await using var connection = new SqlConnection(_connectionString);
         return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
@@ -121,9 +184,9 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
 
         var sql = $"""
             SELECT TOP (1)
-                p.FullName AS ProductName,
-                TRY_CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
-                TRY_CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
+                p.{_productNameField} AS ProductName,
+                CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
+                CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
             FROM {_quotedProductTable} AS p
             WHERE dbo.fn_strunitptype('B', p.ptypeid, 0) = @Barcode;
             """;

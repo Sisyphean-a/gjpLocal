@@ -6,6 +6,16 @@ public sealed class SwcsOptions
 
     public string ProductTable { get; init; } = "dbo.Ptype";
 
+    public string? BarcodeTable { get; init; }
+
+    public string? BarcodeColumn { get; init; }
+
+    public string? PriceTable { get; init; }
+
+    public string? PriceColumn { get; init; }
+
+    public string ProductNameField { get; init; } = "FullName";
+
     public string SpecificationField { get; init; } = "Standard";
 
     public List<string> BarcodeFields { get; init; } = ["Standard", "Barcode"];
