@@ -14,6 +14,8 @@ public sealed class SwcsOptions
 
     public string? PriceColumn { get; init; }
 
+    public string? PriceTypeId { get; init; } = "0001";
+
     public string ProductNameField { get; init; } = "FullName";
 
     public string SpecificationField { get; init; } = "Standard";

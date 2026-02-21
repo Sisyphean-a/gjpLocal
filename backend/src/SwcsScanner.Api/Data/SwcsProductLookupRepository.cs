@@ -19,6 +19,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
     private readonly string? _quotedPriceTable;
     private readonly string? _quotedPriceColumn;
     private readonly string _productNameField;
+    private readonly string? _preferredPriceTypeId;
+    private readonly bool _useUnitScopedBarcodePrice;
     private readonly SwcsOptions _options;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
 
@@ -38,6 +40,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         _quotedPriceTable = string.IsNullOrWhiteSpace(_options.PriceTable) ? null : QuoteTableName(_options.PriceTable);
         _quotedPriceColumn = string.IsNullOrWhiteSpace(_options.PriceColumn) ? null : QuoteIdentifier(_options.PriceColumn);
         _productNameField = QuoteIdentifier(_options.ProductNameField);
+        _preferredPriceTypeId = string.IsNullOrWhiteSpace(_options.PriceTypeId) ? null : _options.PriceTypeId.Trim();
+        _useUnitScopedBarcodePrice = IsXwPtypePriceTable(_options.PriceTable);
     }
 
     public async Task<SwcsSchemaSnapshot> GetSchemaSnapshotAsync(CancellationToken cancellationToken)
@@ -166,6 +170,60 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             cancellationToken: cancellationToken));
     }
 
+    public async Task<DbProductLookupRow?> LookupByCompositeKeywordAsync(
+        string keyword,
+        string? priceField,
+        string? specificationField,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(keyword))
+        {
+            return null;
+        }
+
+        var schema = await GetSchemaSnapshotAsync(cancellationToken);
+        var compositeExpression = BuildCompositeKeywordExpression(schema);
+        if (compositeExpression is null)
+        {
+            return null;
+        }
+
+        var containsPattern = BuildContainsPattern(keyword);
+        var prefixPattern = BuildPrefixPattern(keyword);
+        var specificationExpression = BuildSpecificationExpression(specificationField);
+        var priceExpression = BuildPriceExpression(priceField);
+        var priceJoin = BuildPriceJoin("p");
+        var orderByExpression = schema.Columns.Contains("ptypeid")
+            ? "p.[ptypeid]"
+            : $"p.{_productNameField}";
+
+        var sql = $"""
+            SELECT TOP (1)
+                p.{_productNameField} AS ProductName,
+                {specificationExpression} AS Specification,
+                {priceExpression} AS Price
+            FROM {_quotedProductTable} AS p
+            {priceJoin}
+            WHERE ({compositeExpression}) LIKE @ContainsPattern ESCAPE '\'
+            ORDER BY
+                CASE
+                    WHEN ({compositeExpression}) LIKE @PrefixPattern ESCAPE '\' THEN 0
+                    ELSE 1
+                END,
+                {orderByExpression};
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
+            sql,
+            new
+            {
+                ContainsPattern = containsPattern,
+                PrefixPattern = prefixPattern
+            },
+            cancellationToken: cancellationToken));
+    }
+
     public async Task<IReadOnlyList<DbProductSearchRow>> SearchByBarcodeFragmentAsync(
         string keyword,
         IReadOnlyList<string> barcodeFields,
@@ -199,8 +257,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         CancellationToken cancellationToken)
     {
         var specificationExpression = BuildSpecificationExpression(specificationField);
-        var priceExpression = BuildPriceExpression(priceField);
-        var priceJoin = BuildPriceJoin("p");
+        var priceExpression = BuildBarcodeTablePriceExpression(priceField);
+        var priceJoin = BuildBarcodeTablePriceJoin("p", "bc", priceField);
 
         var sql = $"""
             SELECT TOP (1)
@@ -216,7 +274,11 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         await using var connection = new SqlConnection(_connectionString);
         return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
             sql,
-            new { Barcode = barcode },
+            new
+            {
+                Barcode = barcode,
+                PreferredPriceTypeId = _preferredPriceTypeId
+            },
             cancellationToken: cancellationToken));
     }
 
@@ -228,8 +290,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         CancellationToken cancellationToken)
     {
         var specificationExpression = BuildSpecificationExpression(specificationField);
-        var priceExpression = BuildPriceExpression(priceField);
-        var priceJoin = BuildPriceJoin("p");
+        var priceExpression = BuildBarcodeTablePriceExpression(priceField);
+        var priceJoin = BuildBarcodeTablePriceJoin("p", "bc", priceField);
         var containsPattern = BuildContainsPattern(keyword);
         var prefixPattern = BuildPrefixPattern(keyword);
         var matchedBy = string.IsNullOrWhiteSpace(_options.BarcodeColumn)
@@ -282,7 +344,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 Limit = limit,
                 ContainsPattern = containsPattern,
                 PrefixPattern = prefixPattern,
-                MatchedBy = matchedBy
+                MatchedBy = matchedBy,
+                PreferredPriceTypeId = _preferredPriceTypeId
             },
             cancellationToken: cancellationToken));
         return rows.ToList();
@@ -422,6 +485,91 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         }
 
         return $"INNER JOIN {_quotedPriceTable} AS pr ON {productAlias}.ptypeid = pr.PTypeId";
+    }
+
+    private string BuildBarcodeTablePriceExpression(string? priceField)
+    {
+        if (_useUnitScopedBarcodePrice && _quotedPriceTable is not null && _quotedPriceColumn is not null)
+        {
+            return "CAST(ISNULL(pr.Price, 0) AS DECIMAL(18, 2))";
+        }
+
+        return BuildPriceExpression(priceField);
+    }
+
+    private string BuildBarcodeTablePriceJoin(string productAlias, string barcodeAlias, string? priceField)
+    {
+        if (_useUnitScopedBarcodePrice && _quotedPriceTable is not null && _quotedPriceColumn is not null)
+        {
+            var orderBy = string.IsNullOrWhiteSpace(_preferredPriceTypeId)
+                ? "CASE WHEN prRaw.PRTypeId = '0001' THEN 0 ELSE 1 END, prRaw.PRTypeId"
+                : "CASE WHEN prRaw.PRTypeId = @PreferredPriceTypeId THEN 0 WHEN prRaw.PRTypeId = '0001' THEN 1 ELSE 2 END, prRaw.PRTypeId";
+
+            return $"""
+                OUTER APPLY (
+                    SELECT TOP (1)
+                        prRaw.{_quotedPriceColumn} AS Price
+                    FROM {_quotedPriceTable} AS prRaw
+                    WHERE prRaw.PTypeId = {productAlias}.ptypeid
+                      AND prRaw.UnitID = {barcodeAlias}.UnitID
+                    ORDER BY {orderBy}
+                ) AS pr
+                """;
+        }
+
+        return BuildPriceJoin(productAlias);
+    }
+
+    private static bool IsXwPtypePriceTable(string? tableName)
+    {
+        if (string.IsNullOrWhiteSpace(tableName))
+        {
+            return false;
+        }
+
+        var normalized = tableName.Replace("[", string.Empty, StringComparison.Ordinal)
+            .Replace("]", string.Empty, StringComparison.Ordinal)
+            .Trim();
+
+        return normalized.Equals("xw_P_PtypePrice", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Equals("dbo.xw_P_PtypePrice", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? BuildCompositeKeywordExpression(SwcsSchemaSnapshot schema)
+    {
+        var parts = new List<string>();
+        AddCompositeField(parts, schema.Columns, "pusercode");
+        AddCompositeField(parts, schema.Columns, "pfullname");
+        AddCompositeField(parts, schema.Columns, "pnamepy");
+        AddCompositeField(parts, schema.Columns, "Standard");
+        AddCompositeField(parts, schema.Columns, "Type");
+        AddCompositeField(parts, schema.Columns, "Area");
+
+        if (schema.HasBarcodeFunction && schema.Columns.Contains("ptypeid"))
+        {
+            parts.Add("ISNULL(CAST(dbo.fn_strunitptype('B', p.[ptypeid], 0) AS NVARCHAR(4000)), N'')");
+        }
+
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        return string.Join(" + N'^^^' + ", parts);
+    }
+
+    private static void AddCompositeField(
+        ICollection<string> parts,
+        IReadOnlySet<string> columns,
+        string fieldName)
+    {
+        if (!columns.Contains(fieldName))
+        {
+            return;
+        }
+
+        var quotedField = QuoteIdentifier(fieldName);
+        parts.Add($"ISNULL(CAST(p.{quotedField} AS NVARCHAR(4000)), N'')");
     }
 
     private static string BuildContainsPattern(string keyword)

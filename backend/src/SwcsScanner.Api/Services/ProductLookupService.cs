@@ -1,3 +1,4 @@
+﻿using System.Text;
 using Microsoft.Extensions.Options;
 using SwcsScanner.Api.Data;
 using SwcsScanner.Api.Options;
@@ -26,67 +27,93 @@ public sealed class ProductLookupService : IProductLookupService
 
     public async Task<ProductLookupResult?> LookupAsync(string barcode, CancellationToken cancellationToken)
     {
-        var normalizedBarcode = barcode.Trim();
-        if (normalizedBarcode.Length == 0)
+        var lookupCandidates = BuildLookupCandidates(barcode);
+        if (lookupCandidates.Count == 0)
         {
             return null;
         }
 
         var context = await BuildLookupContextAsync(cancellationToken);
+        var canUseFunctionFallback = _options.EnableFunctionFallback &&
+                                     context.Schema.HasBarcodeFunction &&
+                                     context.Schema.Columns.Contains("ptypeid");
 
-        if (context.UseBarcodeTable)
+        foreach (var lookupValue in lookupCandidates)
         {
-            var barcodeTableResult = await _repository.LookupByFieldAsync(
-                normalizedBarcode,
-                string.Empty,
+            if (context.UseBarcodeTable)
+            {
+                var barcodeTableResult = await _repository.LookupByFieldAsync(
+                    lookupValue,
+                    string.Empty,
+                    context.PriceField,
+                    context.SpecificationField,
+                    cancellationToken);
+
+                if (barcodeTableResult is not null)
+                {
+                    var matchedBy = string.IsNullOrWhiteSpace(_options.BarcodeColumn)
+                        ? "BarcodeTable"
+                        : _options.BarcodeColumn!;
+                    return MapLookupResult(barcodeTableResult, matchedBy);
+                }
+            }
+
+            foreach (var barcodeField in context.AvailableBarcodeFields)
+            {
+                var row = await _repository.LookupByFieldAsync(
+                    lookupValue,
+                    barcodeField,
+                    context.PriceField,
+                    context.SpecificationField,
+                    cancellationToken);
+
+                if (row is not null)
+                {
+                    return MapLookupResult(row, barcodeField);
+                }
+            }
+
+            if (canUseFunctionFallback)
+            {
+                var fallbackRow = await _repository.LookupByFunctionAsync(
+                    lookupValue,
+                    context.PriceField,
+                    context.SpecificationField,
+                    cancellationToken);
+
+                if (fallbackRow is not null)
+                {
+                    return MapLookupResult(fallbackRow, "fn_strunitptype(B)");
+                }
+            }
+        }
+
+        foreach (var lookupValue in lookupCandidates)
+        {
+            if (lookupValue.Length < 8 || !HasAtLeastDigits(lookupValue, 8))
+            {
+                continue;
+            }
+
+            // 兼容管家婆模糊匹配路径：精确匹配失败时再退化。
+            var compatibilityRow = await _repository.LookupByCompositeKeywordAsync(
+                lookupValue,
                 context.PriceField,
                 context.SpecificationField,
                 cancellationToken);
 
-            if (barcodeTableResult is not null)
+            if (compatibilityRow is not null)
             {
-                var matchedBy = string.IsNullOrWhiteSpace(_options.BarcodeColumn)
-                    ? "BarcodeTable"
-                    : _options.BarcodeColumn!;
-                return MapLookupResult(barcodeTableResult, matchedBy);
+                return MapLookupResult(compatibilityRow, "LegacyCompositeLike");
             }
         }
 
-        foreach (var barcodeField in context.AvailableBarcodeFields)
+        if (!canUseFunctionFallback)
         {
-            var row = await _repository.LookupByFieldAsync(
-                normalizedBarcode,
-                barcodeField,
-                context.PriceField,
-                context.SpecificationField,
-                cancellationToken);
-
-            if (row is not null)
-            {
-                return MapLookupResult(row, barcodeField);
-            }
+            _logger.LogDebug("Function fallback disabled or schema missing fn_strunitptype/ptypeid.");
         }
 
-        if (_options.EnableFunctionFallback &&
-            context.Schema.HasBarcodeFunction &&
-            context.Schema.Columns.Contains("ptypeid"))
-        {
-            var fallbackRow = await _repository.LookupByFunctionAsync(
-                normalizedBarcode,
-                context.PriceField,
-                context.SpecificationField,
-                cancellationToken);
-
-            if (fallbackRow is not null)
-            {
-                return MapLookupResult(fallbackRow, "fn_strunitptype(B)");
-            }
-        }
-        else
-        {
-            _logger.LogDebug("未启用函数回退，或数据库中缺少 fn_strunitptype/ptypeid。");
-        }
-
+        _logger.LogDebug("Exact lookup miss. Candidates: {Candidates}", string.Join(", ", lookupCandidates));
         return null;
     }
 
@@ -106,7 +133,7 @@ public sealed class ProductLookupService : IProductLookupService
 
         if (!context.UseBarcodeTable && context.AvailableBarcodeFields.Count == 0)
         {
-            _logger.LogWarning("模糊查询未配置可用条码字段，已返回空结果。");
+            _logger.LogWarning("No available barcode fields for fuzzy search.");
             return [];
         }
 
@@ -156,7 +183,7 @@ public sealed class ProductLookupService : IProductLookupService
         var priceField = (_options.PriceFields ?? []).FirstOrDefault(existingColumns.Contains);
         if (priceField is null)
         {
-            throw new InvalidOperationException($"在 {_options.ProductTable} 中未找到任何可用价格字段。");
+            throw new InvalidOperationException($"No available price field found in {_options.ProductTable}.");
         }
 
         return priceField;
@@ -179,6 +206,92 @@ public sealed class ProductLookupService : IProductLookupService
             row.Specification ?? string.Empty,
             row.Price,
             matchedBy);
+    }
+
+    private static IReadOnlyList<string> BuildLookupCandidates(string barcode)
+    {
+        var input = barcode?.Trim() ?? string.Empty;
+        if (input.Length == 0)
+        {
+            return [];
+        }
+
+        var candidates = new List<string>();
+        AddCandidate(candidates, input);
+
+        var digitsBuilder = new StringBuilder(input.Length);
+        foreach (var ch in input)
+        {
+            if (char.IsDigit(ch))
+            {
+                digitsBuilder.Append(ch);
+            }
+        }
+
+        var digits = digitsBuilder.ToString();
+        if (digits.Length > 0)
+        {
+            AddCandidate(candidates, digits);
+        }
+
+        if (digits.Length >= 16 && digits.StartsWith("01", StringComparison.Ordinal))
+        {
+            var gtin14 = digits.Substring(2, 14);
+            AddCandidate(candidates, gtin14);
+            if (gtin14[0] == '0')
+            {
+                AddCandidate(candidates, gtin14[1..]);
+            }
+        }
+
+        if (digits.Length == 14 && digits[0] == '0')
+        {
+            AddCandidate(candidates, digits[1..]);
+        }
+        else if (digits.Length == 13)
+        {
+            AddCandidate(candidates, $"0{digits}");
+        }
+
+        return candidates;
+    }
+
+    private static void AddCandidate(ICollection<string> candidates, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        foreach (var existing in candidates)
+        {
+            if (string.Equals(existing, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        candidates.Add(value);
+    }
+
+    private static bool HasAtLeastDigits(string value, int minDigits)
+    {
+        var count = 0;
+        foreach (var ch in value)
+        {
+            if (!char.IsDigit(ch))
+            {
+                continue;
+            }
+
+            count++;
+            if (count >= minDigits)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private sealed record LookupContext(

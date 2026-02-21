@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using SwcsScanner.Api.Data;
 using SwcsScanner.Api.Options;
 using SwcsScanner.Api.Services;
@@ -17,7 +17,7 @@ public sealed class ProductLookupServiceTests
             {
                 ["Standard"] = new DbProductLookupRow
                 {
-                    ProductName = "可乐",
+                    ProductName = "cola",
                     Specification = "500ml",
                     Price = 3.5m
                 }
@@ -40,7 +40,7 @@ public sealed class ProductLookupServiceTests
             Schema = BuildSchema(),
             FunctionLookupResult = new DbProductLookupRow
             {
-                ProductName = "雪碧",
+                ProductName = "sprite",
                 Specification = "500ml",
                 Price = 3m
             }
@@ -52,6 +52,56 @@ public sealed class ProductLookupServiceTests
         Assert.NotNull(result);
         Assert.True(repository.FunctionLookupCalled);
         Assert.Equal("fn_strunitptype(B)", result!.BarcodeMatchedBy);
+    }
+
+    [Fact]
+    public async Task LookupAsync_ShouldUseCompositeFallback_WhenExactMatchersMiss()
+    {
+        var repository = new FakeRepository
+        {
+            Schema = BuildSchema(),
+            CompositeLookupResults =
+            {
+                ["6923644237943"] = new DbProductLookupRow
+                {
+                    ProductName = "milk",
+                    Specification = "200ml",
+                    Price = 39.9m
+                }
+            }
+        };
+
+        var service = CreateService(repository);
+        var result = await service.LookupAsync("6923644237943", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("LegacyCompositeLike", result!.BarcodeMatchedBy);
+        Assert.Contains("6923644237943", repository.CompositeLookupKeywords);
+    }
+
+    [Fact]
+    public async Task LookupAsync_ShouldNormalizeGs1Input_ForCompositeFallback()
+    {
+        var repository = new FakeRepository
+        {
+            Schema = BuildSchema(),
+            CompositeLookupResults =
+            {
+                ["6923644237943"] = new DbProductLookupRow
+                {
+                    ProductName = "milk",
+                    Specification = "200ml",
+                    Price = 39.9m
+                }
+            }
+        };
+
+        var service = CreateService(repository);
+        var result = await service.LookupAsync("(01)06923644237943", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("LegacyCompositeLike", result!.BarcodeMatchedBy);
+        Assert.Contains("6923644237943", repository.CompositeLookupKeywords);
     }
 
     [Fact]
@@ -97,7 +147,7 @@ public sealed class ProductLookupServiceTests
             [
                 new DbProductSearchRow
                 {
-                    ProductName = "雪碧",
+                    ProductName = "sprite",
                     Specification = "500ml",
                     Price = 3m,
                     Barcode = "6901028075803",
@@ -164,6 +214,10 @@ public sealed class ProductLookupServiceTests
 
         public DbProductLookupRow? FunctionLookupResult { get; init; }
 
+        public Dictionary<string, DbProductLookupRow> CompositeLookupResults { get; } = new(StringComparer.Ordinal);
+
+        public List<string> CompositeLookupKeywords { get; } = [];
+
         public List<DbProductSearchRow> SearchResults { get; init; } = [];
 
         public bool FunctionLookupCalled { get; private set; }
@@ -198,6 +252,17 @@ public sealed class ProductLookupServiceTests
         {
             FunctionLookupCalled = true;
             return Task.FromResult(FunctionLookupResult);
+        }
+
+        public Task<DbProductLookupRow?> LookupByCompositeKeywordAsync(
+            string keyword,
+            string? priceField,
+            string? specificationField,
+            CancellationToken cancellationToken)
+        {
+            CompositeLookupKeywords.Add(keyword);
+            CompositeLookupResults.TryGetValue(keyword, out var result);
+            return Task.FromResult(result);
         }
 
         public Task<IReadOnlyList<DbProductSearchRow>> SearchByBarcodeFragmentAsync(
