@@ -13,6 +13,10 @@ using SwcsScanner.Api.Security;
 using SwcsScanner.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService(options =>
+{
+    options.ServiceName = "SwcsScanner";
+});
 
 var httpsOptions = builder.Configuration.GetSection(HttpsOptions.SectionName).Get<HttpsOptions>() ?? new HttpsOptions();
 if (!string.IsNullOrWhiteSpace(httpsOptions.PfxPath))

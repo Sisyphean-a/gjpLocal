@@ -57,3 +57,37 @@ dotnet run --project backend/src/SwcsScanner.Api/SwcsScanner.Api.csproj --config
 
 - 默认是：需要运行一次启动命令（或 `start-all.bat`）。
 - 可以改造成开机自启：见 `目标电脑运行指南.md` 的“开机自启/服务化”章节。
+
+## 开机自启服务（已支持）
+
+管理员终端执行：
+
+```bat
+install-service.bat
+```
+
+或直接执行：
+
+```powershell
+.\ops\ps\install-windows-service.ps1 -BuildFrontend -Environment Production
+```
+
+卸载服务：
+
+```bat
+uninstall-service.bat
+```
+
+说明：
+
+- 服务名：`SwcsScanner`
+- 默认发布目录：`C:\Services\SwcsScanner`
+- 启动类型：`Automatic`（开机自启）
+
+## 服务化后能否删除当前项目目录？
+
+- 只要服务安装成功且你不再需要“二次构建/升级”，**可以删除** `E:\gjpLocal`。
+- 原因：服务实际运行的是 `C:\Services\SwcsScanner` 下发布后的可执行文件，不依赖源码目录。
+- 建议保留：
+  - `C:\Services\SwcsScanner`（服务运行目录）
+  - 当前仓库副本（后续升级更方便）
