@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using SwcsScanner.Api.Data;
@@ -33,8 +34,12 @@ if (!string.IsNullOrWhiteSpace(httpsOptions.PfxPath))
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
-builder.Services.Configure<SwcsOptions>(builder.Configuration.GetSection(SwcsOptions.SectionName));
 builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
+builder.Services.AddSingleton<IValidateOptions<SwcsOptions>, SwcsOptionsValidator>();
+builder.Services
+    .AddOptions<SwcsOptions>()
+    .Bind(builder.Configuration.GetSection(SwcsOptions.SectionName))
+    .ValidateOnStart();
 
 builder.Services.AddSingleton<ITimeProvider, SystemTimeProvider>();
 builder.Services.AddScoped<IAuthService, AuthService>();

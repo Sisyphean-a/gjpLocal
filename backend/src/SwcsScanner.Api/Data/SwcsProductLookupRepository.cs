@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Dapper;
 using Microsoft.Data.SqlClient;
@@ -8,7 +9,9 @@ namespace SwcsScanner.Api.Data;
 
 public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
 {
+    private const int DefaultSchemaCacheMinutes = 10;
     private static readonly Regex IdentifierRegex = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
+
     private readonly string _connectionString;
     private readonly string _quotedProductTable;
     private readonly string? _quotedBarcodeTable;
@@ -30,10 +33,10 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         _connectionString = configuration.GetConnectionString("SwcsReadonly")
                             ?? throw new InvalidOperationException("缺少连接字符串 ConnectionStrings:SwcsReadonly。");
         _quotedProductTable = QuoteTableName(_options.ProductTable);
-        _quotedBarcodeTable = string.IsNullOrEmpty(_options.BarcodeTable) ? null : QuoteTableName(_options.BarcodeTable);
-        _quotedBarcodeColumn = string.IsNullOrEmpty(_options.BarcodeColumn) ? null : QuoteIdentifier(_options.BarcodeColumn);
-        _quotedPriceTable = string.IsNullOrEmpty(_options.PriceTable) ? null : QuoteTableName(_options.PriceTable);
-        _quotedPriceColumn = string.IsNullOrEmpty(_options.PriceColumn) ? null : QuoteIdentifier(_options.PriceColumn);
+        _quotedBarcodeTable = string.IsNullOrWhiteSpace(_options.BarcodeTable) ? null : QuoteTableName(_options.BarcodeTable);
+        _quotedBarcodeColumn = string.IsNullOrWhiteSpace(_options.BarcodeColumn) ? null : QuoteIdentifier(_options.BarcodeColumn);
+        _quotedPriceTable = string.IsNullOrWhiteSpace(_options.PriceTable) ? null : QuoteTableName(_options.PriceTable);
+        _quotedPriceColumn = string.IsNullOrWhiteSpace(_options.PriceColumn) ? null : QuoteIdentifier(_options.PriceColumn);
         _productNameField = QuoteIdentifier(_options.ProductNameField);
     }
 
@@ -74,6 +77,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                     ELSE 0
                 END;
                 """;
+
             var hasFunction = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
                 functionSql,
                 cancellationToken: cancellationToken)) == 1;
@@ -84,7 +88,10 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 HasBarcodeFunction = hasFunction
             };
 
-            _schemaExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(Math.Max(1, _options.SchemaCacheMinutes));
+            var cacheMinutes = _options.SchemaCacheMinutes <= 0
+                ? DefaultSchemaCacheMinutes
+                : _options.SchemaCacheMinutes;
+            _schemaExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(cacheMinutes);
             return _cachedSchema;
         }
         finally
@@ -96,8 +103,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
     public async Task<DbProductLookupRow?> LookupByFieldAsync(
         string barcode,
         string barcodeField,
-        string priceField,
-        string specificationField,
+        string? priceField,
+        string? specificationField,
         CancellationToken cancellationToken)
     {
         if (_quotedBarcodeTable is not null && _quotedBarcodeColumn is not null)
@@ -105,21 +112,23 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             return await LookupFromBarcodeTableAsync(barcode, priceField, specificationField, cancellationToken);
         }
 
-        if (string.IsNullOrEmpty(barcodeField))
+        if (string.IsNullOrWhiteSpace(barcodeField))
         {
             return null;
         }
 
         var barcodeColumn = QuoteIdentifier(barcodeField);
-        var priceColumn = QuoteIdentifier(priceField);
-        var specificationColumn = QuoteIdentifier(specificationField);
+        var specificationExpression = BuildSpecificationExpression(specificationField);
+        var priceExpression = BuildPriceExpression(priceField);
+        var priceJoin = BuildPriceJoin("p");
 
         var sql = $"""
             SELECT TOP (1)
                 p.{_productNameField} AS ProductName,
-                CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
-                CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
+                {specificationExpression} AS Specification,
+                {priceExpression} AS Price
             FROM {_quotedProductTable} AS p
+            {priceJoin}
             WHERE p.{barcodeColumn} = @Barcode;
             """;
 
@@ -130,64 +139,23 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             cancellationToken: cancellationToken));
     }
 
-    private async Task<DbProductLookupRow?> LookupFromBarcodeTableAsync(
-        string barcode,
-        string priceField,
-        string specificationField,
-        CancellationToken cancellationToken)
-    {
-        var specificationColumn = QuoteIdentifier(specificationField);
-
-        string sql;
-        if (_quotedPriceTable is not null && _quotedPriceColumn is not null)
-        {
-            sql = $"""
-                SELECT TOP (1)
-                    p.{_productNameField} AS ProductName,
-                    CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
-                    CAST(pr.{_quotedPriceColumn} AS DECIMAL(18, 2)) AS Price
-                FROM {_quotedBarcodeTable} AS bc
-                INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
-                INNER JOIN {_quotedPriceTable} AS pr ON p.ptypeid = pr.PTypeId
-                WHERE bc.{_quotedBarcodeColumn} = @Barcode;
-                """;
-        }
-        else
-        {
-            var priceColumn = QuoteIdentifier(priceField);
-            sql = $"""
-                SELECT TOP (1)
-                    p.{_productNameField} AS ProductName,
-                    CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
-                    CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
-                FROM {_quotedBarcodeTable} AS bc
-                INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
-                WHERE bc.{_quotedBarcodeColumn} = @Barcode;
-                """;
-        }
-
-        await using var connection = new SqlConnection(_connectionString);
-        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
-            sql,
-            new { Barcode = barcode },
-            cancellationToken: cancellationToken));
-    }
-
     public async Task<DbProductLookupRow?> LookupByFunctionAsync(
         string barcode,
-        string priceField,
-        string specificationField,
+        string? priceField,
+        string? specificationField,
         CancellationToken cancellationToken)
     {
-        var priceColumn = QuoteIdentifier(priceField);
-        var specificationColumn = QuoteIdentifier(specificationField);
+        var specificationExpression = BuildSpecificationExpression(specificationField);
+        var priceExpression = BuildPriceExpression(priceField);
+        var priceJoin = BuildPriceJoin("p");
 
         var sql = $"""
             SELECT TOP (1)
                 p.{_productNameField} AS ProductName,
-                CAST(p.{specificationColumn} AS NVARCHAR(200)) AS Specification,
-                CAST(p.{priceColumn} AS DECIMAL(18, 2)) AS Price
+                {specificationExpression} AS Specification,
+                {priceExpression} AS Price
             FROM {_quotedProductTable} AS p
+            {priceJoin}
             WHERE dbo.fn_strunitptype('B', p.ptypeid, 0) = @Barcode;
             """;
 
@@ -196,6 +164,283 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             sql,
             new { Barcode = barcode },
             cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<DbProductSearchRow>> SearchByBarcodeFragmentAsync(
+        string keyword,
+        IReadOnlyList<string> barcodeFields,
+        string? priceField,
+        string? specificationField,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(keyword) || limit <= 0)
+        {
+            return [];
+        }
+
+        if (_quotedBarcodeTable is not null && _quotedBarcodeColumn is not null)
+        {
+            return await SearchFromBarcodeTableAsync(keyword, priceField, specificationField, limit, cancellationToken);
+        }
+
+        if (barcodeFields.Count == 0)
+        {
+            return [];
+        }
+
+        return await SearchFromProductTableAsync(keyword, barcodeFields, priceField, specificationField, limit, cancellationToken);
+    }
+
+    private async Task<DbProductLookupRow?> LookupFromBarcodeTableAsync(
+        string barcode,
+        string? priceField,
+        string? specificationField,
+        CancellationToken cancellationToken)
+    {
+        var specificationExpression = BuildSpecificationExpression(specificationField);
+        var priceExpression = BuildPriceExpression(priceField);
+        var priceJoin = BuildPriceJoin("p");
+
+        var sql = $"""
+            SELECT TOP (1)
+                p.{_productNameField} AS ProductName,
+                {specificationExpression} AS Specification,
+                {priceExpression} AS Price
+            FROM {_quotedBarcodeTable} AS bc
+            INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
+            {priceJoin}
+            WHERE bc.{_quotedBarcodeColumn} = @Barcode;
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
+            sql,
+            new { Barcode = barcode },
+            cancellationToken: cancellationToken));
+    }
+
+    private async Task<IReadOnlyList<DbProductSearchRow>> SearchFromBarcodeTableAsync(
+        string keyword,
+        string? priceField,
+        string? specificationField,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var specificationExpression = BuildSpecificationExpression(specificationField);
+        var priceExpression = BuildPriceExpression(priceField);
+        var priceJoin = BuildPriceJoin("p");
+        var containsPattern = BuildContainsPattern(keyword);
+        var prefixPattern = BuildPrefixPattern(keyword);
+        var matchedBy = string.IsNullOrWhiteSpace(_options.BarcodeColumn)
+            ? "BarcodeTable"
+            : _options.BarcodeColumn!;
+
+        var sql = $"""
+            WITH candidates AS (
+                SELECT
+                    p.ptypeid AS ProductId,
+                    p.{_productNameField} AS ProductName,
+                    {specificationExpression} AS Specification,
+                    {priceExpression} AS Price,
+                    CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) AS Barcode,
+                    @MatchedBy AS BarcodeMatchedBy,
+                    CASE
+                        WHEN CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) LIKE @PrefixPattern ESCAPE '\' THEN 0
+                        ELSE 1
+                    END AS MatchRank,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY p.ptypeid
+                        ORDER BY
+                            CASE
+                                WHEN CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) LIKE @PrefixPattern ESCAPE '\' THEN 0
+                                ELSE 1
+                            END,
+                            CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100))
+                    ) AS DedupRank
+                FROM {_quotedBarcodeTable} AS bc
+                INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
+                {priceJoin}
+                WHERE CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) LIKE @ContainsPattern ESCAPE '\'
+            )
+            SELECT TOP (@Limit)
+                ProductName,
+                Specification,
+                Price,
+                Barcode,
+                BarcodeMatchedBy
+            FROM candidates
+            WHERE DedupRank = 1
+            ORDER BY MatchRank, Barcode;
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        var rows = await connection.QueryAsync<DbProductSearchRow>(new CommandDefinition(
+            sql,
+            new
+            {
+                Limit = limit,
+                ContainsPattern = containsPattern,
+                PrefixPattern = prefixPattern,
+                MatchedBy = matchedBy
+            },
+            cancellationToken: cancellationToken));
+        return rows.ToList();
+    }
+
+    private async Task<IReadOnlyList<DbProductSearchRow>> SearchFromProductTableAsync(
+        string keyword,
+        IReadOnlyList<string> barcodeFields,
+        string? priceField,
+        string? specificationField,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var specificationExpression = BuildSpecificationExpression(specificationField);
+        var priceExpression = BuildPriceExpression(priceField);
+        var priceJoin = BuildPriceJoin("p");
+        var containsPattern = BuildContainsPattern(keyword);
+        var prefixPattern = BuildPrefixPattern(keyword);
+        var parameters = new DynamicParameters();
+        parameters.Add("Limit", limit);
+        parameters.Add("ContainsPattern", containsPattern);
+        parameters.Add("PrefixPattern", prefixPattern);
+
+        var unionSql = new StringBuilder();
+        var hasAnyField = false;
+
+        for (var index = 0; index < barcodeFields.Count; index++)
+        {
+            var field = barcodeFields[index];
+            if (string.IsNullOrWhiteSpace(field))
+            {
+                continue;
+            }
+
+            var quotedBarcodeField = QuoteIdentifier(field);
+            if (hasAnyField)
+            {
+                unionSql.AppendLine("UNION ALL");
+            }
+
+            unionSql.AppendLine($"""
+                SELECT
+                    p.ptypeid AS ProductId,
+                    p.{_productNameField} AS ProductName,
+                    {specificationExpression} AS Specification,
+                    {priceExpression} AS Price,
+                    CAST(p.{quotedBarcodeField} AS NVARCHAR(100)) AS Barcode,
+                    @MatchedBy{index} AS BarcodeMatchedBy,
+                    {index} AS FieldRank,
+                    CASE
+                        WHEN CAST(p.{quotedBarcodeField} AS NVARCHAR(100)) LIKE @PrefixPattern ESCAPE '\' THEN 0
+                        ELSE 1
+                    END AS MatchRank
+                FROM {_quotedProductTable} AS p
+                {priceJoin}
+                WHERE CAST(p.{quotedBarcodeField} AS NVARCHAR(100)) LIKE @ContainsPattern ESCAPE '\'
+                """);
+
+            parameters.Add($"MatchedBy{index}", field);
+            hasAnyField = true;
+        }
+
+        if (!hasAnyField)
+        {
+            return [];
+        }
+
+        var sql = $"""
+            WITH raw AS (
+            {unionSql}
+            ),
+            dedup AS (
+                SELECT
+                    ProductId,
+                    ProductName,
+                    Specification,
+                    Price,
+                    Barcode,
+                    BarcodeMatchedBy,
+                    FieldRank,
+                    MatchRank,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ProductId
+                        ORDER BY MatchRank, FieldRank, Barcode
+                    ) AS DedupRank
+                FROM raw
+            )
+            SELECT TOP (@Limit)
+                ProductName,
+                Specification,
+                Price,
+                Barcode,
+                BarcodeMatchedBy
+            FROM dedup
+            WHERE DedupRank = 1
+            ORDER BY MatchRank, FieldRank, Barcode;
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        var rows = await connection.QueryAsync<DbProductSearchRow>(new CommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken));
+        return rows.ToList();
+    }
+
+    private string BuildSpecificationExpression(string? specificationField)
+    {
+        if (string.IsNullOrWhiteSpace(specificationField))
+        {
+            return "CAST(NULL AS NVARCHAR(200))";
+        }
+
+        return $"CAST(p.{QuoteIdentifier(specificationField)} AS NVARCHAR(200))";
+    }
+
+    private string BuildPriceExpression(string? priceField)
+    {
+        if (_quotedPriceTable is not null && _quotedPriceColumn is not null)
+        {
+            return $"CAST(pr.{_quotedPriceColumn} AS DECIMAL(18, 2))";
+        }
+
+        if (string.IsNullOrWhiteSpace(priceField))
+        {
+            throw new InvalidOperationException("未指定可用价格字段。");
+        }
+
+        return $"CAST(p.{QuoteIdentifier(priceField)} AS DECIMAL(18, 2))";
+    }
+
+    private string BuildPriceJoin(string productAlias)
+    {
+        if (_quotedPriceTable is null || _quotedPriceColumn is null)
+        {
+            return string.Empty;
+        }
+
+        return $"INNER JOIN {_quotedPriceTable} AS pr ON {productAlias}.ptypeid = pr.PTypeId";
+    }
+
+    private static string BuildContainsPattern(string keyword)
+    {
+        return $"%{EscapeLikeValue(keyword)}%";
+    }
+
+    private static string BuildPrefixPattern(string keyword)
+    {
+        return $"{EscapeLikeValue(keyword)}%";
+    }
+
+    private static string EscapeLikeValue(string value)
+    {
+        return value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal)
+            .Replace("[", "\\[", StringComparison.Ordinal);
     }
 
     private static string QuoteTableName(string tableName)

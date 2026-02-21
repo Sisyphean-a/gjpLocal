@@ -4,6 +4,9 @@ public sealed record ApiErrorResponse(string Code, string Message)
 {
     public static ApiErrorResponse InvalidBarcode() => new("INVALID_BARCODE", "条码不能为空。");
 
+    public static ApiErrorResponse InvalidSearchKeyword(int minLength) =>
+        new("INVALID_SEARCH_KEYWORD", $"搜索关键词至少 {minLength} 个字符。");
+
     public static ApiErrorResponse NotFoundBarcode(string barcode) => new("PRODUCT_NOT_FOUND", $"未找到条码 {barcode} 对应的商品。");
 
     public static ApiErrorResponse InvalidCredential() => new("INVALID_CREDENTIAL", "用户名或密码错误。");

@@ -55,13 +55,16 @@ cd ops/ps
 
 ```powershell
 cd ops/ps
-.\start-services.ps1 -BuildFrontend -Environment Production
+.\init-and-start.ps1 -BuildFrontend -Environment Production
 ```
+
+说明：`init-and-start.ps1` 会先做只读检查（配置、证书、数据库连通性、关键表字段），通过后再调用 `start-services.ps1` 启动。
 
 默认访问地址：
 
 - 手机端：`https://<主机局域网IP>:5001`
 - 健康检查：`https://<主机局域网IP>:5001/api/health`
+- 条码模糊查：`https://<主机局域网IP>:5001/api/products/search?keyword=6901&limit=20`
 
 ## 7. 手机端证书信任提示
 

@@ -38,6 +38,13 @@ cd ops/ps
 .\start-services.ps1 -BuildFrontend
 ```
 
+生产环境（数据库已存在，推荐）可使用一键检查+启动：
+
+```powershell
+cd ops/ps
+.\init-and-start.ps1 -BuildFrontend -Environment Production
+```
+
 ## 数据库恢复脚本
 
 按你的要求提供原始恢复脚本：`ops/sql/restore_swcs.sql`
@@ -52,6 +59,7 @@ RESTORE DATABASE swcs FROM DISK = 'F:\swcs_backup.bak' WITH REPLACE;
 
 - `POST /api/auth/login`：登录换取 JWT
 - `GET /api/products/lookup?barcode=xxx`：扫码查价
+- `GET /api/products/search?keyword=6901&limit=20`：条码片段模糊查询（前缀优先，包含兜底）
 - `GET /api/health`：健康检查
 
 ## 默认账号与配置

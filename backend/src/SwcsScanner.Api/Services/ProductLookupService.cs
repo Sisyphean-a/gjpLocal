@@ -6,6 +6,10 @@ namespace SwcsScanner.Api.Services;
 
 public sealed class ProductLookupService : IProductLookupService
 {
+    private const int DefaultSearchLimit = 20;
+    private const int MaxSearchLimit = 50;
+    private const int MinSearchKeywordLength = 2;
+
     private readonly ISwcsProductLookupRepository _repository;
     private readonly SwcsOptions _options;
     private readonly ILogger<ProductLookupService> _logger;
@@ -22,90 +26,60 @@ public sealed class ProductLookupService : IProductLookupService
 
     public async Task<ProductLookupResult?> LookupAsync(string barcode, CancellationToken cancellationToken)
     {
-        var trimmedBarcode = barcode.Trim();
-        if (trimmedBarcode.Length == 0)
+        var normalizedBarcode = barcode.Trim();
+        if (normalizedBarcode.Length == 0)
         {
             return null;
         }
 
-        var schema = await _repository.GetSchemaSnapshotAsync(cancellationToken);
-        
-        string? priceField = null;
-        if (string.IsNullOrEmpty(_options.PriceTable))
+        var context = await BuildLookupContextAsync(cancellationToken);
+
+        if (context.UseBarcodeTable)
         {
-            priceField = PickFirstExistingField(_options.PriceFields, schema.Columns);
-            if (priceField is null)
+            var barcodeTableResult = await _repository.LookupByFieldAsync(
+                normalizedBarcode,
+                string.Empty,
+                context.PriceField,
+                context.SpecificationField,
+                cancellationToken);
+
+            if (barcodeTableResult is not null)
             {
-                throw new InvalidOperationException($"在 {_options.ProductTable} 中未找到任何可用价格字段。");
+                var matchedBy = string.IsNullOrWhiteSpace(_options.BarcodeColumn)
+                    ? "BarcodeTable"
+                    : _options.BarcodeColumn!;
+                return MapLookupResult(barcodeTableResult, matchedBy);
             }
         }
 
-        var specificationField = schema.Columns.Contains(_options.SpecificationField)
-            ? _options.SpecificationField
-            : _options.SpecificationField;
-
-        if (!string.IsNullOrEmpty(_options.BarcodeTable))
+        foreach (var barcodeField in context.AvailableBarcodeFields)
         {
             var row = await _repository.LookupByFieldAsync(
-                trimmedBarcode,
-                string.Empty,
-                priceField,
-                specificationField,
+                normalizedBarcode,
+                barcodeField,
+                context.PriceField,
+                context.SpecificationField,
                 cancellationToken);
 
             if (row is not null)
             {
-                return new ProductLookupResult(
-                    row.ProductName,
-                    row.Specification ?? string.Empty,
-                    row.Price,
-                    "BarcodeTable");
+                return MapLookupResult(row, barcodeField);
             }
-        }
-
-        var availableBarcodeFields = _options.BarcodeFields
-            .Where(field => schema.Columns.Contains(field))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        foreach (var barcodeField in availableBarcodeFields)
-        {
-            var row = await _repository.LookupByFieldAsync(
-                trimmedBarcode,
-                barcodeField,
-                priceField,
-                specificationField,
-                cancellationToken);
-
-            if (row is null)
-            {
-                continue;
-            }
-
-            return new ProductLookupResult(
-                row.ProductName,
-                row.Specification ?? string.Empty,
-                row.Price,
-                barcodeField);
         }
 
         if (_options.EnableFunctionFallback &&
-            schema.HasBarcodeFunction &&
-            schema.Columns.Contains("ptypeid"))
+            context.Schema.HasBarcodeFunction &&
+            context.Schema.Columns.Contains("ptypeid"))
         {
             var fallbackRow = await _repository.LookupByFunctionAsync(
-                trimmedBarcode,
-                priceField,
-                specificationField,
+                normalizedBarcode,
+                context.PriceField,
+                context.SpecificationField,
                 cancellationToken);
 
             if (fallbackRow is not null)
             {
-                return new ProductLookupResult(
-                    fallbackRow.ProductName,
-                    fallbackRow.Specification ?? string.Empty,
-                    fallbackRow.Price,
-                    "fn_strunitptype(B)");
+                return MapLookupResult(fallbackRow, "fn_strunitptype(B)");
             }
         }
         else
@@ -116,8 +90,101 @@ public sealed class ProductLookupService : IProductLookupService
         return null;
     }
 
-    private static string? PickFirstExistingField(IEnumerable<string> candidates, IReadOnlySet<string> existingColumns)
+    public async Task<IReadOnlyList<ProductSearchItemResult>> SearchByBarcodeFragmentAsync(
+        string keyword,
+        int limit,
+        CancellationToken cancellationToken)
     {
-        return candidates.FirstOrDefault(existingColumns.Contains);
+        var normalizedKeyword = keyword.Trim();
+        if (normalizedKeyword.Length < MinSearchKeywordLength)
+        {
+            return [];
+        }
+
+        var safeLimit = NormalizeLimit(limit);
+        var context = await BuildLookupContextAsync(cancellationToken);
+
+        if (!context.UseBarcodeTable && context.AvailableBarcodeFields.Count == 0)
+        {
+            _logger.LogWarning("模糊查询未配置可用条码字段，已返回空结果。");
+            return [];
+        }
+
+        var rows = await _repository.SearchByBarcodeFragmentAsync(
+            normalizedKeyword,
+            context.AvailableBarcodeFields,
+            context.PriceField,
+            context.SpecificationField,
+            safeLimit,
+            cancellationToken);
+
+        return rows
+            .Select(row => new ProductSearchItemResult(
+                row.ProductName,
+                row.Specification ?? string.Empty,
+                row.Price,
+                row.Barcode,
+                row.BarcodeMatchedBy))
+            .ToList();
     }
+
+    private async Task<LookupContext> BuildLookupContextAsync(CancellationToken cancellationToken)
+    {
+        var schema = await _repository.GetSchemaSnapshotAsync(cancellationToken);
+        var priceField = ResolvePriceField(schema.Columns);
+        var specificationField = schema.Columns.Contains(_options.SpecificationField)
+            ? _options.SpecificationField
+            : null;
+        var availableBarcodeFields = (_options.BarcodeFields ?? [])
+            .Where(field => !string.IsNullOrWhiteSpace(field))
+            .Where(schema.Columns.Contains)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var useBarcodeTable = !string.IsNullOrWhiteSpace(_options.BarcodeTable) &&
+                              !string.IsNullOrWhiteSpace(_options.BarcodeColumn);
+
+        return new LookupContext(schema, priceField, specificationField, availableBarcodeFields, useBarcodeTable);
+    }
+
+    private string? ResolvePriceField(IReadOnlySet<string> existingColumns)
+    {
+        if (!string.IsNullOrWhiteSpace(_options.PriceTable))
+        {
+            return null;
+        }
+
+        var priceField = (_options.PriceFields ?? []).FirstOrDefault(existingColumns.Contains);
+        if (priceField is null)
+        {
+            throw new InvalidOperationException($"在 {_options.ProductTable} 中未找到任何可用价格字段。");
+        }
+
+        return priceField;
+    }
+
+    private static int NormalizeLimit(int limit)
+    {
+        if (limit <= 0)
+        {
+            return DefaultSearchLimit;
+        }
+
+        return Math.Min(limit, MaxSearchLimit);
+    }
+
+    private static ProductLookupResult MapLookupResult(DbProductLookupRow row, string matchedBy)
+    {
+        return new ProductLookupResult(
+            row.ProductName,
+            row.Specification ?? string.Empty,
+            row.Price,
+            matchedBy);
+    }
+
+    private sealed record LookupContext(
+        SwcsSchemaSnapshot Schema,
+        string? PriceField,
+        string? SpecificationField,
+        IReadOnlyList<string> AvailableBarcodeFields,
+        bool UseBarcodeTable);
 }
