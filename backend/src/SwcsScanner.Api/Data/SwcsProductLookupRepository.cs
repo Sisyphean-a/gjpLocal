@@ -128,9 +128,12 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
 
         var sql = $"""
             SELECT TOP (1)
+                p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
                 {specificationExpression} AS Specification,
-                {priceExpression} AS Price
+                {priceExpression} AS Price,
+                CAST(NULL AS NVARCHAR(50)) AS MatchedUnitId,
+                CAST(@Barcode AS NVARCHAR(100)) AS MatchedBarcode
             FROM {_quotedProductTable} AS p
             {priceJoin}
             WHERE p.{barcodeColumn} = @Barcode;
@@ -155,9 +158,12 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
 
         var sql = $"""
             SELECT TOP (1)
+                p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
                 {specificationExpression} AS Specification,
-                {priceExpression} AS Price
+                {priceExpression} AS Price,
+                CAST(NULL AS NVARCHAR(50)) AS MatchedUnitId,
+                CAST(@Barcode AS NVARCHAR(100)) AS MatchedBarcode
             FROM {_quotedProductTable} AS p
             {priceJoin}
             WHERE dbo.fn_strunitptype('B', p.ptypeid, 0) = @Barcode;
@@ -199,9 +205,12 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
 
         var sql = $"""
             SELECT TOP (1)
+                p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
                 {specificationExpression} AS Specification,
-                {priceExpression} AS Price
+                {priceExpression} AS Price,
+                CAST(NULL AS NVARCHAR(50)) AS MatchedUnitId,
+                CAST(@ContainsKeyword AS NVARCHAR(100)) AS MatchedBarcode
             FROM {_quotedProductTable} AS p
             {priceJoin}
             WHERE ({compositeExpression}) LIKE @ContainsPattern ESCAPE '\'
@@ -218,6 +227,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             sql,
             new
             {
+                ContainsKeyword = keyword,
                 ContainsPattern = containsPattern,
                 PrefixPattern = prefixPattern
             },
@@ -250,6 +260,89 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         return await SearchFromProductTableAsync(keyword, barcodeFields, priceField, specificationField, limit, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<DbProductUnitRow>> GetUnitsByProductIdAsync(
+        string productId,
+        string? matchedBarcode,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(productId))
+        {
+            return [];
+        }
+
+        if (_quotedBarcodeTable is null || _quotedBarcodeColumn is null)
+        {
+            return [];
+        }
+
+        if (_quotedPriceTable is null || _quotedPriceColumn is null)
+        {
+            return [];
+        }
+
+        var orderBy = string.IsNullOrWhiteSpace(_preferredPriceTypeId)
+            ? "CASE WHEN prRaw.PRTypeId = '0001' THEN 0 ELSE 1 END, prRaw.PRTypeId"
+            : "CASE WHEN prRaw.PRTypeId = @PreferredPriceTypeId THEN 0 WHEN prRaw.PRTypeId = '0001' THEN 1 ELSE 2 END, prRaw.PRTypeId";
+
+        var sql = $"""
+            SET ARITHABORT ON;
+            SELECT
+                CAST(u.Ordid AS NVARCHAR(50)) AS UnitId,
+                CAST(ISNULL(u.Unit1, N'') AS NVARCHAR(100)) AS UnitName,
+                CAST(ISNULL(u.URate, 0) AS NVARCHAR(100)) AS UnitRate,
+                CAST(ISNULL(pr.Price, 0) AS DECIMAL(18, 2)) AS Price,
+                CAST(ISNULL(bc.BarcodeList, N'') AS NVARCHAR(1000)) AS BarcodeList,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM {_quotedBarcodeTable} AS m
+                        WHERE m.PTypeId = u.PTypeId
+                          AND m.UnitID = u.Ordid
+                          AND m.{_quotedBarcodeColumn} = @MatchedBarcode
+                    ) THEN CAST(1 AS BIT)
+                    ELSE CAST(0 AS BIT)
+                END AS IsMatchedUnit
+            FROM dbo.xw_PtypeUnit AS u
+            OUTER APPLY (
+                SELECT TOP (1)
+                    prRaw.{_quotedPriceColumn} AS Price
+                FROM {_quotedPriceTable} AS prRaw
+                WHERE prRaw.PTypeId = u.PTypeId
+                  AND prRaw.UnitID = u.Ordid
+                ORDER BY {orderBy}
+            ) AS pr
+            OUTER APPLY (
+                SELECT
+                    STUFF((
+                        SELECT N',' + CAST(bcRaw.{_quotedBarcodeColumn} AS NVARCHAR(100))
+                        FROM {_quotedBarcodeTable} AS bcRaw
+                        WHERE bcRaw.PTypeId = u.PTypeId
+                          AND bcRaw.UnitID = u.Ordid
+                        ORDER BY
+                            CASE WHEN ISNUMERIC(bcRaw.Ordid) = 1 THEN CAST(bcRaw.Ordid AS INT) ELSE 2147483647 END,
+                            bcRaw.Ordid
+                        FOR XML PATH(''), TYPE
+                    ).value('.', 'NVARCHAR(MAX)'), 1, 1, N'') AS BarcodeList
+            ) AS bc
+            WHERE u.PTypeId = @ProductId
+            ORDER BY
+                CASE WHEN ISNUMERIC(u.Ordid) = 1 THEN CAST(u.Ordid AS INT) ELSE 2147483647 END,
+                u.Ordid;
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        var rows = await connection.QueryAsync<DbProductUnitRow>(new CommandDefinition(
+            sql,
+            new
+            {
+                ProductId = productId,
+                MatchedBarcode = matchedBarcode,
+                PreferredPriceTypeId = _preferredPriceTypeId
+            },
+            cancellationToken: cancellationToken));
+        return rows.ToList();
+    }
+
     private async Task<DbProductLookupRow?> LookupFromBarcodeTableAsync(
         string barcode,
         string? priceField,
@@ -262,9 +355,12 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
 
         var sql = $"""
             SELECT TOP (1)
+                p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
                 {specificationExpression} AS Specification,
-                {priceExpression} AS Price
+                {priceExpression} AS Price,
+                CAST(bc.UnitID AS NVARCHAR(50)) AS MatchedUnitId,
+                CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) AS MatchedBarcode
             FROM {_quotedBarcodeTable} AS bc
             INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
             {priceJoin}

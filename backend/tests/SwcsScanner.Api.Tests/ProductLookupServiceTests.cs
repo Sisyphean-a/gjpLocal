@@ -105,6 +105,57 @@ public sealed class ProductLookupServiceTests
     }
 
     [Fact]
+    public async Task LookupAsync_ShouldExposeCurrentUnit_AndUseCurrentUnitPrice()
+    {
+        var repository = new FakeRepository
+        {
+            Schema = BuildSchema(),
+            DirectLookupResults =
+            {
+                ["Standard"] = new DbProductLookupRow
+                {
+                    ProductId = "000123",
+                    ProductName = "cigarette",
+                    Specification = "1x10",
+                    Price = 28m,
+                    MatchedUnitId = "2",
+                    MatchedBarcode = "6901028218740"
+                }
+            },
+            UnitRows =
+            [
+                new DbProductUnitRow
+                {
+                    UnitId = "1",
+                    UnitName = "box",
+                    UnitRate = "1",
+                    Price = 28m,
+                    BarcodeList = "6901028218740",
+                    IsMatchedUnit = false
+                },
+                new DbProductUnitRow
+                {
+                    UnitId = "2",
+                    UnitName = "carton",
+                    UnitRate = "10",
+                    Price = 280m,
+                    BarcodeList = "16901028218747",
+                    IsMatchedUnit = true
+                }
+            ]
+        };
+
+        var service = CreateService(repository);
+        var result = await service.LookupAsync("6901028218740", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.NotNull(result!.CurrentUnit);
+        Assert.Equal("2", result.CurrentUnit!.UnitId);
+        Assert.Equal(280m, result.Price);
+        Assert.Equal(2, result.Units.Count);
+    }
+
+    [Fact]
     public async Task LookupAsync_ShouldThrow_WhenPriceFieldUnavailable()
     {
         var repository = new FakeRepository
@@ -220,6 +271,8 @@ public sealed class ProductLookupServiceTests
 
         public List<DbProductSearchRow> SearchResults { get; init; } = [];
 
+        public List<DbProductUnitRow> UnitRows { get; init; } = [];
+
         public bool FunctionLookupCalled { get; private set; }
 
         public bool SearchCalled { get; private set; }
@@ -263,6 +316,14 @@ public sealed class ProductLookupServiceTests
             CompositeLookupKeywords.Add(keyword);
             CompositeLookupResults.TryGetValue(keyword, out var result);
             return Task.FromResult(result);
+        }
+
+        public Task<IReadOnlyList<DbProductUnitRow>> GetUnitsByProductIdAsync(
+            string productId,
+            string? matchedBarcode,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IReadOnlyList<DbProductUnitRow>>(UnitRows);
         }
 
         public Task<IReadOnlyList<DbProductSearchRow>> SearchByBarcodeFragmentAsync(

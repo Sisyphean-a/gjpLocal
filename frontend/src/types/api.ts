@@ -9,6 +9,17 @@ export interface ProductLookupResponse {
   specification: string
   price: number
   barcodeMatchedBy: string
+  currentUnit: ProductLookupUnitResponse | null
+  units: ProductLookupUnitResponse[]
+}
+
+export interface ProductLookupUnitResponse {
+  unitId: string
+  unitName: string
+  unitRate: string
+  price: number
+  barcodes: string[]
+  isMatchedUnit: boolean
 }
 
 export interface ApiErrorResponse {

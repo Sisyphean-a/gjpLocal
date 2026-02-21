@@ -23,6 +23,11 @@ public interface ISwcsProductLookupRepository
         string? specificationField,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<DbProductUnitRow>> GetUnitsByProductIdAsync(
+        string productId,
+        string? matchedBarcode,
+        CancellationToken cancellationToken);
+
     Task<IReadOnlyList<DbProductSearchRow>> SearchByBarcodeFragmentAsync(
         string keyword,
         IReadOnlyList<string> barcodeFields,

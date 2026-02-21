@@ -54,7 +54,7 @@ public sealed class ProductLookupService : IProductLookupService
                     var matchedBy = string.IsNullOrWhiteSpace(_options.BarcodeColumn)
                         ? "BarcodeTable"
                         : _options.BarcodeColumn!;
-                    return MapLookupResult(barcodeTableResult, matchedBy);
+                    return await MapLookupResultAsync(barcodeTableResult, matchedBy, cancellationToken);
                 }
             }
 
@@ -69,7 +69,7 @@ public sealed class ProductLookupService : IProductLookupService
 
                 if (row is not null)
                 {
-                    return MapLookupResult(row, barcodeField);
+                    return await MapLookupResultAsync(row, barcodeField, cancellationToken);
                 }
             }
 
@@ -83,7 +83,7 @@ public sealed class ProductLookupService : IProductLookupService
 
                 if (fallbackRow is not null)
                 {
-                    return MapLookupResult(fallbackRow, "fn_strunitptype(B)");
+                    return await MapLookupResultAsync(fallbackRow, "fn_strunitptype(B)", cancellationToken);
                 }
             }
         }
@@ -104,7 +104,7 @@ public sealed class ProductLookupService : IProductLookupService
 
             if (compatibilityRow is not null)
             {
-                return MapLookupResult(compatibilityRow, "LegacyCompositeLike");
+                return await MapLookupResultAsync(compatibilityRow, "LegacyCompositeLike", cancellationToken);
             }
         }
 
@@ -199,13 +199,65 @@ public sealed class ProductLookupService : IProductLookupService
         return Math.Min(limit, MaxSearchLimit);
     }
 
-    private static ProductLookupResult MapLookupResult(DbProductLookupRow row, string matchedBy)
+    private async Task<ProductLookupResult> MapLookupResultAsync(
+        DbProductLookupRow row,
+        string matchedBy,
+        CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(row.ProductId))
+        {
+            return new ProductLookupResult(
+                row.ProductName,
+                row.Specification ?? string.Empty,
+                row.Price,
+                matchedBy,
+                null,
+                []);
+        }
+
+        var unitRows = await _repository.GetUnitsByProductIdAsync(
+            row.ProductId,
+            row.MatchedBarcode,
+            cancellationToken);
+
+        var units = unitRows
+            .Select(unit => new ProductLookupUnitResult(
+                unit.UnitId,
+                unit.UnitName,
+                unit.UnitRate,
+                unit.Price,
+                SplitBarcodes(unit.BarcodeList),
+                unit.IsMatchedUnit))
+            .ToList();
+
+        var currentUnit = units.FirstOrDefault(unit => unit.IsMatchedUnit)
+                          ?? units.FirstOrDefault(unit =>
+                              !string.IsNullOrWhiteSpace(row.MatchedUnitId) &&
+                              string.Equals(unit.UnitId, row.MatchedUnitId, StringComparison.OrdinalIgnoreCase))
+                          ?? units.FirstOrDefault();
+
+        var currentPrice = currentUnit?.Price ?? row.Price;
+
         return new ProductLookupResult(
             row.ProductName,
             row.Specification ?? string.Empty,
-            row.Price,
-            matchedBy);
+            currentPrice,
+            matchedBy,
+            currentUnit,
+            units);
+    }
+
+    private static IReadOnlyList<string> SplitBarcodes(string? barcodeList)
+    {
+        if (string.IsNullOrWhiteSpace(barcodeList))
+        {
+            return [];
+        }
+
+        return barcodeList
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 
     private static IReadOnlyList<string> BuildLookupCandidates(string barcode)

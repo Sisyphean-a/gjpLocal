@@ -4,4 +4,6 @@ public sealed record ProductLookupResult(
     string ProductName,
     string Specification,
     decimal Price,
-    string BarcodeMatchedBy);
+    string BarcodeMatchedBy,
+    ProductLookupUnitResult? CurrentUnit,
+    IReadOnlyList<ProductLookupUnitResult> Units);

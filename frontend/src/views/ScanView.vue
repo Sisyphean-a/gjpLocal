@@ -20,22 +20,44 @@ const supportedFormats = [
   Html5QrcodeSupportedFormats.UPC_E,
   Html5QrcodeSupportedFormats.CODE_39,
 ]
+
 const username = ref(getCurrentUsername())
 const state = ref<LookupState>('idle')
-const statusText = ref('将商品条码放入扫描框中')
+const statusText = ref('将商品条码放入扫描框内')
 const currentBarcode = ref('')
 const scannerReady = ref(false)
 const product = ref<ProductLookupResponse | null>(null)
 const errorMessage = ref('')
+const showUnitDetails = ref(false)
 
 let scanner: Html5Qrcode | null = null
-let resetTimer: number | null = null
 let isProcessing = false
 
 const pageClass = computed(() => ({
   'scan-page--error': state.value === 'error',
   'scan-page--success': state.value === 'success',
 }))
+
+const hasMultipleUnits = computed<boolean>(() => {
+  if (!product.value) {
+    return false
+  }
+
+  return product.value.units.length > 1
+})
+
+function formatRate(rate: string): string {
+  const value = Number(rate)
+  if (!Number.isFinite(value)) {
+    return rate || '-'
+  }
+
+  if (Math.abs(value - Math.trunc(value)) < 1e-9) {
+    return `${Math.trunc(value)}`
+  }
+
+  return value.toFixed(2)
+}
 
 async function startScanner(): Promise<void> {
   scanner = new Html5Qrcode(scannerElementId, {
@@ -84,11 +106,12 @@ async function onScanSuccess(decodedText: string): Promise<void> {
   currentBarcode.value = barcode
   state.value = 'loading'
   statusText.value = '正在查询...'
+  showUnitDetails.value = false
 
   try {
     scanner?.pause(true)
   } catch {
-    // 某些浏览器不支持 pause，忽略并继续流程。
+    // 某些浏览器不支持 pause，忽略后继续流程。
   }
 
   try {
@@ -111,32 +134,20 @@ async function onScanSuccess(decodedText: string): Promise<void> {
       errorMessage.value = '网络异常，请检查主机服务和 WiFi 连接。'
     }
     await playErrorTone()
-  } finally {
-    scheduleReset()
   }
 }
 
-function scheduleReset(): void {
-  if (resetTimer) {
-    window.clearTimeout(resetTimer)
-  }
-
-  resetTimer = window.setTimeout(() => {
-    resetToIdle()
-  }, 3000)
+function toggleUnitDetails(): void {
+  showUnitDetails.value = !showUnitDetails.value
 }
 
 function resetToIdle(): void {
-  if (resetTimer) {
-    window.clearTimeout(resetTimer)
-    resetTimer = null
-  }
-
   state.value = 'idle'
   statusText.value = scannerReady.value ? '扫描中...' : '正在初始化摄像头...'
   product.value = null
   errorMessage.value = ''
   currentBarcode.value = ''
+  showUnitDetails.value = false
   isProcessing = false
 
   try {
@@ -184,9 +195,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(async () => {
-  if (resetTimer) {
-    window.clearTimeout(resetTimer)
-  }
   await stopScanner()
 })
 </script>
@@ -209,10 +217,10 @@ onBeforeUnmount(async () => {
     <section class="scan-instruction">
       <p>1. 条码对准扫描框中央。</p>
       <p>2. 扫描后自动查询，无需点击。</p>
-      <p>3. 结果展示 3 秒后自动恢复扫码。</p>
+      <p>3. 结果不会自动关闭，请点击“继续扫码”。</p>
     </section>
 
-    <section v-if="state !== 'idle'" class="scan-overlay" @click="resetToIdle">
+    <section v-if="state !== 'idle'" class="scan-overlay">
       <article class="scan-result" :class="`scan-result--${state}`">
         <template v-if="state === 'loading'">
           <p class="scan-result-label">查询中</p>
@@ -225,6 +233,33 @@ onBeforeUnmount(async () => {
           <p class="scan-product-spec">{{ product.specification || '无规格' }}</p>
           <p class="scan-product-price">￥{{ product.price.toFixed(2) }}</p>
           <p class="scan-result-meta">匹配字段：{{ product.barcodeMatchedBy }}</p>
+
+                    <button
+            v-if="hasMultipleUnits"
+            type="button"
+            class="scan-units-toggle"
+            @click="toggleUnitDetails"
+          >
+            {{ showUnitDetails ? '收起全部单位' : `展开全部单位（${product.units.length}）` }}
+          </button>
+
+          <section v-if="hasMultipleUnits && showUnitDetails" class="scan-unit-list">
+            <article
+              v-for="unit in product.units"
+              :key="unit.unitId"
+              class="scan-unit-item"
+              :class="{ 'scan-unit-item--matched': unit.isMatchedUnit }"
+            >
+              <p class="scan-unit-item-head">
+                <span>{{ unit.unitName || '未命名单位' }}</span>
+                <span>换算：{{ formatRate(unit.unitRate) }}</span>
+                <span>￥{{ unit.price.toFixed(2) }}</span>
+              </p>
+              <p v-if="unit.barcodes.length > 0" class="scan-unit-barcodes">
+                条码：{{ unit.barcodes.join(' / ') }}
+              </p>
+            </article>
+          </section>
         </template>
 
         <template v-else>
@@ -233,7 +268,9 @@ onBeforeUnmount(async () => {
           <p class="scan-result-error">{{ errorMessage }}</p>
         </template>
 
-        <p class="scan-result-tip">点击任意位置可立即继续扫码</p>
+        <div class="scan-result-actions">
+          <button type="button" class="scan-result-close" @click="resetToIdle">继续扫码</button>
+        </div>
       </article>
     </section>
   </main>

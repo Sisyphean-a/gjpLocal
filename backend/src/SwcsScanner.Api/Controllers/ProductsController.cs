@@ -46,7 +46,25 @@ public sealed class ProductsController : ControllerBase
             result.ProductName,
             result.Specification,
             result.Price,
-            result.BarcodeMatchedBy));
+            result.BarcodeMatchedBy,
+            result.CurrentUnit is null
+                ? null
+                : new ProductLookupUnitResponse(
+                    result.CurrentUnit.UnitId,
+                    result.CurrentUnit.UnitName,
+                    result.CurrentUnit.UnitRate,
+                    result.CurrentUnit.Price,
+                    result.CurrentUnit.Barcodes,
+                    result.CurrentUnit.IsMatchedUnit),
+            result.Units
+                .Select(unit => new ProductLookupUnitResponse(
+                    unit.UnitId,
+                    unit.UnitName,
+                    unit.UnitRate,
+                    unit.Price,
+                    unit.Barcodes,
+                    unit.IsMatchedUnit))
+                .ToList()));
     }
 
     [HttpGet("search")]
