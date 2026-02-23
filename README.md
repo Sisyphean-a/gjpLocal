@@ -60,7 +60,7 @@ dotnet run --project backend/src/SwcsScanner.Api/SwcsScanner.Api.csproj --config
 
 ## 开机自启服务（已支持）
 
-管理员终端执行：
+普通终端即可执行（脚本会自动请求管理员权限/UAC）：
 
 ```bat
 install-service.bat
@@ -78,8 +78,15 @@ install-service.bat
 uninstall-service.bat
 ```
 
+快速重启已安装服务（不重新发布）：
+
+```bat
+restart-service.bat
+```
+
 说明：
 
+- 非管理员执行 `install-service.bat` / `uninstall-service.bat` / `restart-service.bat` 时，会自动弹出 UAC 提权。
 - 服务名：`SwcsScanner`
 - 默认发布目录：`C:\Services\SwcsScanner`
 - 启动类型：`Automatic`（开机自启）
