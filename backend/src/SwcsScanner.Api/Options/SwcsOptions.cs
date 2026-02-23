@@ -27,4 +27,6 @@ public sealed class SwcsOptions
     public bool EnableFunctionFallback { get; init; } = true;
 
     public int SchemaCacheMinutes { get; init; } = 10;
+
+    public int QueryTimeoutSeconds { get; init; } = 8;
 }

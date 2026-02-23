@@ -48,6 +48,16 @@ public sealed class SwcsOptionsValidator : IValidateOptions<SwcsOptions>
             failures.Add("Swcs:SchemaCacheMinutes 不能小于 0。");
         }
 
+        if (options.QueryTimeoutSeconds <= 0)
+        {
+            failures.Add("Swcs:QueryTimeoutSeconds 必须大于 0。");
+        }
+
+        if (options.QueryTimeoutSeconds > 120)
+        {
+            failures.Add("Swcs:QueryTimeoutSeconds 不能大于 120。");
+        }
+
         return failures.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(failures);

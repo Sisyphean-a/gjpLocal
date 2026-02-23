@@ -21,6 +21,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
     private readonly string _productNameField;
     private readonly string? _preferredPriceTypeId;
     private readonly bool _useUnitScopedBarcodePrice;
+    private readonly int _queryTimeoutSeconds;
     private readonly SwcsOptions _options;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
 
@@ -42,6 +43,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         _productNameField = QuoteIdentifier(_options.ProductNameField);
         _preferredPriceTypeId = string.IsNullOrWhiteSpace(_options.PriceTypeId) ? null : _options.PriceTypeId.Trim();
         _useUnitScopedBarcodePrice = IsXwPtypePriceTable(_options.PriceTable);
+        _queryTimeoutSeconds = _options.QueryTimeoutSeconds;
     }
 
     public async Task<SwcsSchemaSnapshot> GetSchemaSnapshotAsync(CancellationToken cancellationToken)
@@ -69,10 +71,10 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 WHERE o.object_id = OBJECT_ID(@ObjectName) AND o.type = 'U';
                 """;
 
-            var columns = (await connection.QueryAsync<string>(new CommandDefinition(
+            var columns = (await connection.QueryAsync<string>(CreateCommand(
                 columnSql,
                 new { ObjectName = _options.ProductTable },
-                cancellationToken: cancellationToken)))
+                cancellationToken)))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             const string functionSql = """
@@ -82,9 +84,10 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 END;
                 """;
 
-            var hasFunction = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            var hasFunction = await connection.ExecuteScalarAsync<int>(CreateCommand(
                 functionSql,
-                cancellationToken: cancellationToken)) == 1;
+                null,
+                cancellationToken)) == 1;
 
             _cachedSchema = new SwcsSchemaSnapshot
             {
@@ -140,10 +143,10 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             """;
 
         await using var connection = new SqlConnection(_connectionString);
-        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
+        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(CreateCommand(
             sql,
             new { Barcode = barcode },
-            cancellationToken: cancellationToken));
+            cancellationToken));
     }
 
     public async Task<DbProductLookupRow?> LookupByFunctionAsync(
@@ -170,10 +173,10 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             """;
 
         await using var connection = new SqlConnection(_connectionString);
-        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
+        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(CreateCommand(
             sql,
             new { Barcode = barcode },
-            cancellationToken: cancellationToken));
+            cancellationToken));
     }
 
     public async Task<DbProductLookupRow?> LookupByCompositeKeywordAsync(
@@ -223,7 +226,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             """;
 
         await using var connection = new SqlConnection(_connectionString);
-        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
+        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(CreateCommand(
             sql,
             new
             {
@@ -231,7 +234,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 ContainsPattern = containsPattern,
                 PrefixPattern = prefixPattern
             },
-            cancellationToken: cancellationToken));
+            cancellationToken));
     }
 
     public async Task<IReadOnlyList<DbProductSearchRow>> SearchByBarcodeFragmentAsync(
@@ -331,7 +334,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             """;
 
         await using var connection = new SqlConnection(_connectionString);
-        var rows = await connection.QueryAsync<DbProductUnitRow>(new CommandDefinition(
+        var rows = await connection.QueryAsync<DbProductUnitRow>(CreateCommand(
             sql,
             new
             {
@@ -339,7 +342,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 MatchedBarcode = matchedBarcode,
                 PreferredPriceTypeId = _preferredPriceTypeId
             },
-            cancellationToken: cancellationToken));
+            cancellationToken));
         return rows.ToList();
     }
 
@@ -368,14 +371,14 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             """;
 
         await using var connection = new SqlConnection(_connectionString);
-        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(new CommandDefinition(
+        return await connection.QueryFirstOrDefaultAsync<DbProductLookupRow>(CreateCommand(
             sql,
             new
             {
                 Barcode = barcode,
                 PreferredPriceTypeId = _preferredPriceTypeId
             },
-            cancellationToken: cancellationToken));
+            cancellationToken));
     }
 
     private async Task<IReadOnlyList<DbProductSearchRow>> SearchFromBarcodeTableAsync(
@@ -433,7 +436,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             """;
 
         await using var connection = new SqlConnection(_connectionString);
-        var rows = await connection.QueryAsync<DbProductSearchRow>(new CommandDefinition(
+        var rows = await connection.QueryAsync<DbProductSearchRow>(CreateCommand(
             sql,
             new
             {
@@ -443,7 +446,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 MatchedBy = matchedBy,
                 PreferredPriceTypeId = _preferredPriceTypeId
             },
-            cancellationToken: cancellationToken));
+            cancellationToken));
         return rows.ToList();
     }
 
@@ -541,11 +544,20 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             """;
 
         await using var connection = new SqlConnection(_connectionString);
-        var rows = await connection.QueryAsync<DbProductSearchRow>(new CommandDefinition(
+        var rows = await connection.QueryAsync<DbProductSearchRow>(CreateCommand(
             sql,
             parameters,
-            cancellationToken: cancellationToken));
+            cancellationToken));
         return rows.ToList();
+    }
+
+    private CommandDefinition CreateCommand(string sql, object? parameters, CancellationToken cancellationToken)
+    {
+        return new CommandDefinition(
+            sql,
+            parameters,
+            commandTimeout: _queryTimeoutSeconds,
+            cancellationToken: cancellationToken);
     }
 
     private string BuildSpecificationExpression(string? specificationField)

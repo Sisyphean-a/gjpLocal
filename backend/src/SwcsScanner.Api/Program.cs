@@ -37,10 +37,20 @@ if (!string.IsNullOrWhiteSpace(httpsOptions.PfxPath))
     });
 }
 
-builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
-builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
-builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
+builder.Services.AddSingleton<IValidateOptions<AuthOptions>, AuthOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<SwcsOptions>, SwcsOptionsValidator>();
+builder.Services
+    .AddOptions<AuthOptions>()
+    .Bind(builder.Configuration.GetSection(AuthOptions.SectionName))
+    .ValidateOnStart();
+builder.Services
+    .AddOptions<JwtOptions>()
+    .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
+    .ValidateOnStart();
+builder.Services
+    .AddOptions<CorsOptions>()
+    .Bind(builder.Configuration.GetSection(CorsOptions.SectionName))
+    .ValidateOnStart();
 builder.Services
     .AddOptions<SwcsOptions>()
     .Bind(builder.Configuration.GetSection(SwcsOptions.SectionName))
@@ -83,8 +93,15 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
-if (jwtOptions.Key.Length < 32)
+var corsOptions = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>() ?? new CorsOptions();
+var strictSecurityValidation = builder.Configuration.GetValue<bool?>("Security:EnableStrictValidation") ?? false;
+if (strictSecurityValidation)
+{
+    SecurityConfigurationValidator.Validate(builder.Environment, jwtOptions, authOptions, corsOptions);
+}
+else if (jwtOptions.Key.Length < 32)
 {
     throw new InvalidOperationException("Jwt:Key 长度至少 32 位。");
 }
@@ -127,18 +144,26 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-var corsOptions = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>() ?? new CorsOptions();
+var allowedCorsOrigins = corsOptions.AllowedOrigins
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
+    .Select(origin => origin.Trim())
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToList();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("mobile-client", policy =>
     {
-        if (corsOptions.AllowedOrigins.Count == 0)
+        if (allowedCorsOrigins.Count == 0)
         {
-            policy.AllowAnyOrigin();
+            policy.WithOrigins(
+                "https://localhost:5173",
+                "https://127.0.0.1:5173",
+                "https://localhost:5001");
         }
         else
         {
-            policy.WithOrigins(corsOptions.AllowedOrigins.ToArray());
+            policy.WithOrigins(allowedCorsOrigins.ToArray());
         }
 
         policy.AllowAnyHeader().AllowAnyMethod();
@@ -170,8 +195,11 @@ app.UseExceptionHandler(handler =>
     });
 });
 
-app.UseSwagger();
-app.UseSwaggerUI();
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 app.UseHttpsRedirection();
 app.UseCors("mobile-client");

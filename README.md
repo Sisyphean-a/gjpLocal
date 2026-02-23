@@ -29,12 +29,37 @@ start-all.bat
 start-all.bat nobuild
 ```
 
+说明：`start-all.bat` 默认以 `Production` 环境启动，已内置可用默认值（局域网开箱即用）。
+
+## 代码改完后一键更新服务（推荐）
+
+改完代码后，直接运行：
+
+```bat
+update-service.bat
+```
+
+仅后端改动、无需重建前端时：
+
+```bat
+update-service.bat nobuild
+```
+
+该脚本会自动执行：提权（UAC） -> 构建（可选） -> 发布后端 -> 更新服务配置 -> 重启服务。
+
 启动后访问：
 
 - 本机：`https://localhost:5001`
 - 手机：`https://<本机局域网IP>:5001`
 
-默认账号：`user01 / 1234`
+默认账号（Development/Production）：`user01 / 1234`
+
+## 默认开箱说明（局域网）
+
+- 默认无需手工配置额外参数即可启动并登录。
+- `restart-service.bat` 仅做服务重启，不需要再次配置参数。
+- 前端 `VITE_API_BASE_URL` 默认为空（同源调用）；开发代理目标通过 `VITE_PROXY_TARGET` 配置。
+- 如需启用严格安全校验，可将 `Security:EnableStrictValidation` 设为 `true`，再按严格模式补齐生产配置。
 
 ## 开发模式（手动）
 

@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { clearSession, getAccessToken } from './auth'
 
-const baseURL = 'https://192.168.0.188:5001'
+const baseURL = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 
 export const api = axios.create({
   baseURL,
