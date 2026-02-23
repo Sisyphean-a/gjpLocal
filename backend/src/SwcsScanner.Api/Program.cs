@@ -131,15 +131,19 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.AddPolicy("lookup", context =>
     {
-        var partitionKey = context.User.Identity?.Name
-                           ?? context.Connection.RemoteIpAddress?.ToString()
-                           ?? "anonymous";
+        var userName = context.User.Identity?.Name?.Trim();
+        var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+        var partitionKey = string.IsNullOrWhiteSpace(userName)
+            ? clientIp
+            : $"{userName}@{clientIp}";
 
         return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 15,
+            PermitLimit = 1,
             Window = TimeSpan.FromSeconds(1),
-            QueueLimit = 0
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = 1,
+            AutoReplenishment = true
         });
     });
 });
