@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
@@ -150,6 +151,18 @@ app.UseExceptionHandler(handler =>
 {
     handler.Run(async context =>
     {
+        var exceptionFeature = context.Features.Get<IExceptionHandlerPathFeature>();
+        if (exceptionFeature?.Error is not null)
+        {
+            var logger = context.RequestServices
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger("GlobalException");
+            logger.LogError(
+                exceptionFeature.Error,
+                "Unhandled exception at {Path}",
+                exceptionFeature.Path ?? context.Request.Path.Value ?? "unknown");
+        }
+
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
         context.Response.ContentType = "application/json; charset=utf-8";
         var payload = ApiErrorResponse.ServerError();

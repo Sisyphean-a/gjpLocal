@@ -22,6 +22,20 @@ export interface ProductLookupUnitResponse {
   isMatchedUnit: boolean
 }
 
+export interface ProductSearchResponse {
+  keyword: string
+  count: number
+  items: ProductSearchItemResponse[]
+}
+
+export interface ProductSearchItemResponse {
+  productName: string
+  specification: string
+  price: number
+  barcode: string
+  barcodeMatchedBy: string
+}
+
 export interface ApiErrorResponse {
   code: string
   message: string

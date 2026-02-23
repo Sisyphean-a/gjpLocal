@@ -182,10 +182,11 @@ input {
 
 .scan-reader {
   width: 100%;
+  min-height: 320px;
 }
 
 .scan-reader video {
-  object-fit: cover;
+  object-fit: contain;
 }
 
 #barcode-reader {
@@ -208,18 +209,100 @@ input {
   font-size: 13px;
 }
 
-.scan-instruction {
-  margin-top: 14px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(17, 24, 39, 0.08);
-  padding: 12px 14px;
-  font-size: 13px;
-  color: var(--ink-700);
+.scan-init-button {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 10px 12px;
+  font-weight: 700;
+  color: #f8fafc;
+  background: linear-gradient(120deg, #0369a1 0%, #1d4ed8 100%);
+  cursor: pointer;
 }
 
-.scan-instruction p {
-  margin: 6px 0;
+.scan-init-button:disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.scan-manual-query {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.scan-manual-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.scan-manual-input:focus {
+  outline: 2px solid rgba(3, 105, 161, 0.28);
+  border-color: #0369a1;
+}
+
+.scan-manual-submit {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: #fff;
+  font-weight: 700;
+  background: linear-gradient(120deg, #0369a1 0%, #1d4ed8 100%);
+  cursor: pointer;
+}
+
+.scan-manual-submit:disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.scan-candidates {
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.scan-candidates-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-700);
+  font-weight: 700;
+}
+
+.scan-candidate-item {
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px 10px;
+  text-align: left;
+  display: grid;
+  gap: 3px;
+}
+
+.scan-candidate-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.scan-candidate-meta {
+  font-size: 12px;
+  color: #475569;
+  word-break: break-all;
+}
+
+.scan-candidate-price {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f766e;
 }
 
 .scan-overlay {
@@ -372,6 +455,10 @@ input {
     padding: 12px 10px 20px;
   }
 
+  .scan-reader {
+    min-height: 260px;
+  }
+
   .scan-result {
     padding: 14px;
   }
@@ -382,5 +469,9 @@ input {
 
   .scan-result-close {
     width: 100%;
+  }
+
+  .scan-manual-query {
+    grid-template-columns: 1fr;
   }
 }
