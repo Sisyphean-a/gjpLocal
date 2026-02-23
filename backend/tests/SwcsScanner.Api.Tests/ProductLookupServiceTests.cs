@@ -18,6 +18,8 @@ public sealed class ProductLookupServiceTests
                 ["Standard"] = new DbProductLookupRow
                 {
                     ProductName = "cola",
+                    ProductCode = "10001",
+                    ProductShortCode = "kl",
                     Specification = "500ml",
                     Price = 3.5m
                 }
@@ -29,6 +31,8 @@ public sealed class ProductLookupServiceTests
 
         Assert.NotNull(result);
         Assert.Equal("Standard", result!.BarcodeMatchedBy);
+        Assert.Equal("10001", result.ProductCode);
+        Assert.Equal("kl", result.ProductShortCode);
         Assert.False(repository.FunctionLookupCalled);
     }
 
@@ -199,6 +203,8 @@ public sealed class ProductLookupServiceTests
                 new DbProductSearchRow
                 {
                     ProductName = "sprite",
+                    ProductCode = "08093",
+                    ProductShortCode = "mnjn",
                     Specification = "500ml",
                     Price = 3m,
                     Barcode = "6901028075803",
@@ -214,6 +220,8 @@ public sealed class ProductLookupServiceTests
         Assert.Equal(50, repository.LastSearchLimit);
         Assert.Single(result);
         Assert.Equal("6901028075803", result[0].Barcode);
+        Assert.Equal("08093", result[0].ProductCode);
+        Assert.Equal("mnjn", result[0].ProductShortCode);
     }
 
     [Fact]

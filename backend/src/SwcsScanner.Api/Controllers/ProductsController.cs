@@ -44,6 +44,8 @@ public sealed class ProductsController : ControllerBase
 
         return Ok(new ProductLookupResponse(
             result.ProductName,
+            result.ProductCode,
+            result.ProductShortCode,
             result.Specification,
             result.Price,
             result.BarcodeMatchedBy,
@@ -91,6 +93,8 @@ public sealed class ProductsController : ControllerBase
         var items = result
             .Select(item => new ProductSearchItemResponse(
                 item.ProductName,
+                item.ProductCode,
+                item.ProductShortCode,
                 item.Specification,
                 item.Price,
                 item.Barcode,

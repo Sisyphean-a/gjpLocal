@@ -168,6 +168,8 @@ public sealed class ProductLookupService : IProductLookupService
             return rows
                 .Select(row => new ProductSearchItemResult(
                     row.ProductName,
+                    row.ProductCode,
+                    row.ProductShortCode,
                     row.Specification ?? string.Empty,
                     row.Price,
                     row.Barcode,
@@ -233,6 +235,8 @@ public sealed class ProductLookupService : IProductLookupService
         {
             return new ProductLookupResult(
                 row.ProductName,
+                row.ProductCode,
+                row.ProductShortCode,
                 row.Specification ?? string.Empty,
                 row.Price,
                 matchedBy,
@@ -265,6 +269,8 @@ public sealed class ProductLookupService : IProductLookupService
 
         return new ProductLookupResult(
             row.ProductName,
+            row.ProductCode,
+            row.ProductShortCode,
             row.Specification ?? string.Empty,
             currentPrice,
             matchedBy,

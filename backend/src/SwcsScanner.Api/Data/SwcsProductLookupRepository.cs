@@ -10,6 +10,8 @@ namespace SwcsScanner.Api.Data;
 public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
 {
     private const int DefaultSchemaCacheMinutes = 10;
+    private const string ProductCodeFieldName = "pusercode";
+    private const string ProductShortCodeFieldName = "pnamepy";
     private static readonly Regex IdentifierRegex = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly string _connectionString;
@@ -124,15 +126,20 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             return null;
         }
 
+        var schema = await GetSchemaSnapshotAsync(cancellationToken);
         var barcodeColumn = QuoteIdentifier(barcodeField);
         var specificationExpression = BuildSpecificationExpression(specificationField);
         var priceExpression = BuildPriceExpression(priceField);
         var priceJoin = BuildPriceJoin("p");
+        var productCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductCodeFieldName, 100);
+        var productShortCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductShortCodeFieldName, 100);
 
         var sql = $"""
             SELECT TOP (1)
                 p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
+                {productCodeExpression} AS ProductCode,
+                {productShortCodeExpression} AS ProductShortCode,
                 {specificationExpression} AS Specification,
                 {priceExpression} AS Price,
                 CAST(NULL AS NVARCHAR(50)) AS MatchedUnitId,
@@ -155,14 +162,19 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         string? specificationField,
         CancellationToken cancellationToken)
     {
+        var schema = await GetSchemaSnapshotAsync(cancellationToken);
         var specificationExpression = BuildSpecificationExpression(specificationField);
         var priceExpression = BuildPriceExpression(priceField);
         var priceJoin = BuildPriceJoin("p");
+        var productCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductCodeFieldName, 100);
+        var productShortCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductShortCodeFieldName, 100);
 
         var sql = $"""
             SELECT TOP (1)
                 p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
+                {productCodeExpression} AS ProductCode,
+                {productShortCodeExpression} AS ProductShortCode,
                 {specificationExpression} AS Specification,
                 {priceExpression} AS Price,
                 CAST(NULL AS NVARCHAR(50)) AS MatchedUnitId,
@@ -202,6 +214,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         var specificationExpression = BuildSpecificationExpression(specificationField);
         var priceExpression = BuildPriceExpression(priceField);
         var priceJoin = BuildPriceJoin("p");
+        var productCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductCodeFieldName, 100);
+        var productShortCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductShortCodeFieldName, 100);
         var orderByExpression = schema.Columns.Contains("ptypeid")
             ? "p.[ptypeid]"
             : $"p.{_productNameField}";
@@ -210,6 +224,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             SELECT TOP (1)
                 p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
+                {productCodeExpression} AS ProductCode,
+                {productShortCodeExpression} AS ProductShortCode,
                 {specificationExpression} AS Specification,
                 {priceExpression} AS Price,
                 CAST(NULL AS NVARCHAR(50)) AS MatchedUnitId,
@@ -352,14 +368,19 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         string? specificationField,
         CancellationToken cancellationToken)
     {
+        var schema = await GetSchemaSnapshotAsync(cancellationToken);
         var specificationExpression = BuildSpecificationExpression(specificationField);
         var priceExpression = BuildBarcodeTablePriceExpression(priceField);
         var priceJoin = BuildBarcodeTablePriceJoin("p", "bc", priceField);
+        var productCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductCodeFieldName, 100);
+        var productShortCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductShortCodeFieldName, 100);
 
         var sql = $"""
             SELECT TOP (1)
                 p.ptypeid AS ProductId,
                 p.{_productNameField} AS ProductName,
+                {productCodeExpression} AS ProductCode,
+                {productShortCodeExpression} AS ProductShortCode,
                 {specificationExpression} AS Specification,
                 {priceExpression} AS Price,
                 CAST(bc.UnitID AS NVARCHAR(50)) AS MatchedUnitId,
@@ -388,44 +409,103 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         int limit,
         CancellationToken cancellationToken)
     {
+        var schema = await GetSchemaSnapshotAsync(cancellationToken);
         var specificationExpression = BuildSpecificationExpression(specificationField);
         var priceExpression = BuildBarcodeTablePriceExpression(priceField);
         var priceJoin = BuildBarcodeTablePriceJoin("p", "bc", priceField);
         var containsPattern = BuildContainsPattern(keyword);
         var prefixPattern = BuildPrefixPattern(keyword);
-        var matchedBy = string.IsNullOrWhiteSpace(_options.BarcodeColumn)
-            ? "BarcodeTable"
-            : _options.BarcodeColumn!;
+        var productCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductCodeFieldName, 100);
+        var productShortCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductShortCodeFieldName, 100);
+        var barcodeExpression = $"CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100))";
+        var productNameExpression = $"CAST(p.{_productNameField} AS NVARCHAR(200))";
+
+        var searchTargets = new List<(string Expression, string MatchedBy)>
+        {
+            (
+                barcodeExpression,
+                string.IsNullOrWhiteSpace(_options.BarcodeColumn)
+                    ? "BarcodeTable"
+                    : _options.BarcodeColumn!
+            )
+        };
+
+        if (schema.Columns.Contains(ProductShortCodeFieldName))
+        {
+            searchTargets.Add(($"CAST(p.{QuoteIdentifier(ProductShortCodeFieldName)} AS NVARCHAR(100))", ProductShortCodeFieldName));
+        }
+
+        if (schema.Columns.Contains(ProductCodeFieldName))
+        {
+            searchTargets.Add(($"CAST(p.{QuoteIdentifier(ProductCodeFieldName)} AS NVARCHAR(100))", ProductCodeFieldName));
+        }
+
+        searchTargets.Add((productNameExpression, _options.ProductNameField));
+
+        var whereClause = string.Join(
+            $"{Environment.NewLine}                   OR ",
+            searchTargets.Select(target => $"{target.Expression} LIKE @ContainsPattern ESCAPE '\\'"));
+
+        var matchRankExpressionBuilder = new StringBuilder();
+        matchRankExpressionBuilder.AppendLine("CASE");
+        for (var index = 0; index < searchTargets.Count; index++)
+        {
+            matchRankExpressionBuilder.AppendLine($"                        WHEN {searchTargets[index].Expression} LIKE @PrefixPattern ESCAPE '\\' THEN {index}");
+        }
+
+        matchRankExpressionBuilder.AppendLine($"                        ELSE {searchTargets.Count}");
+        matchRankExpressionBuilder.Append("                    END");
+        var matchRankExpression = matchRankExpressionBuilder.ToString();
+
+        var matchedByExpressionBuilder = new StringBuilder();
+        matchedByExpressionBuilder.AppendLine("CASE");
+        for (var index = 0; index < searchTargets.Count; index++)
+        {
+            matchedByExpressionBuilder.AppendLine($"                        WHEN {searchTargets[index].Expression} LIKE @PrefixPattern ESCAPE '\\' THEN @MatchedBy{index}");
+        }
+
+        matchedByExpressionBuilder.AppendLine("                        ELSE @MatchedBy0");
+        matchedByExpressionBuilder.Append("                    END");
+        var matchedByExpression = matchedByExpressionBuilder.ToString();
+
+        var parameters = new DynamicParameters();
+        parameters.Add("Limit", limit);
+        parameters.Add("ContainsPattern", containsPattern);
+        parameters.Add("PrefixPattern", prefixPattern);
+        parameters.Add("PreferredPriceTypeId", _preferredPriceTypeId);
+
+        for (var index = 0; index < searchTargets.Count; index++)
+        {
+            parameters.Add($"MatchedBy{index}", searchTargets[index].MatchedBy);
+        }
 
         var sql = $"""
             WITH candidates AS (
                 SELECT
                     p.ptypeid AS ProductId,
                     p.{_productNameField} AS ProductName,
+                    {productCodeExpression} AS ProductCode,
+                    {productShortCodeExpression} AS ProductShortCode,
                     {specificationExpression} AS Specification,
                     {priceExpression} AS Price,
-                    CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) AS Barcode,
-                    @MatchedBy AS BarcodeMatchedBy,
-                    CASE
-                        WHEN CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) LIKE @PrefixPattern ESCAPE '\' THEN 0
-                        ELSE 1
-                    END AS MatchRank,
+                    {barcodeExpression} AS Barcode,
+                    {matchedByExpression} AS BarcodeMatchedBy,
+                    {matchRankExpression} AS MatchRank,
                     ROW_NUMBER() OVER (
                         PARTITION BY p.ptypeid
                         ORDER BY
-                            CASE
-                                WHEN CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) LIKE @PrefixPattern ESCAPE '\' THEN 0
-                                ELSE 1
-                            END,
-                            CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100))
+                            {matchRankExpression},
+                            {barcodeExpression}
                     ) AS DedupRank
                 FROM {_quotedBarcodeTable} AS bc
                 INNER JOIN {_quotedProductTable} AS p ON bc.PTypeId = p.ptypeid
                 {priceJoin}
-                WHERE CAST(bc.{_quotedBarcodeColumn} AS NVARCHAR(100)) LIKE @ContainsPattern ESCAPE '\'
+                WHERE {whereClause}
             )
             SELECT TOP (@Limit)
                 ProductName,
+                ProductCode,
+                ProductShortCode,
                 Specification,
                 Price,
                 Barcode,
@@ -438,14 +518,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         await using var connection = new SqlConnection(_connectionString);
         var rows = await connection.QueryAsync<DbProductSearchRow>(CreateCommand(
             sql,
-            new
-            {
-                Limit = limit,
-                ContainsPattern = containsPattern,
-                PrefixPattern = prefixPattern,
-                MatchedBy = matchedBy,
-                PreferredPriceTypeId = _preferredPriceTypeId
-            },
+            parameters,
             cancellationToken));
         return rows.ToList();
     }
@@ -458,11 +531,47 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         int limit,
         CancellationToken cancellationToken)
     {
+        var schema = await GetSchemaSnapshotAsync(cancellationToken);
         var specificationExpression = BuildSpecificationExpression(specificationField);
         var priceExpression = BuildPriceExpression(priceField);
         var priceJoin = BuildPriceJoin("p");
         var containsPattern = BuildContainsPattern(keyword);
         var prefixPattern = BuildPrefixPattern(keyword);
+        var productCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductCodeFieldName, 100);
+        var productShortCodeExpression = BuildOptionalTextFieldExpression(schema.Columns, "p", ProductShortCodeFieldName, 100);
+
+        var normalizedBarcodeFields = barcodeFields
+            .Where(field => !string.IsNullOrWhiteSpace(field))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (normalizedBarcodeFields.Count == 0)
+        {
+            return [];
+        }
+
+        var preferredBarcodeExpression = BuildPreferredBarcodeExpression("p", normalizedBarcodeFields);
+        var searchableFields = new List<string>(normalizedBarcodeFields);
+
+        if (schema.Columns.Contains(ProductShortCodeFieldName))
+        {
+            searchableFields.Add(ProductShortCodeFieldName);
+        }
+
+        if (schema.Columns.Contains(ProductCodeFieldName))
+        {
+            searchableFields.Add(ProductCodeFieldName);
+        }
+
+        if (schema.Columns.Contains(_options.ProductNameField))
+        {
+            searchableFields.Add(_options.ProductNameField);
+        }
+
+        searchableFields = searchableFields
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var parameters = new DynamicParameters();
         parameters.Add("Limit", limit);
         parameters.Add("ContainsPattern", containsPattern);
@@ -471,15 +580,20 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
         var unionSql = new StringBuilder();
         var hasAnyField = false;
 
-        for (var index = 0; index < barcodeFields.Count; index++)
+        for (var index = 0; index < searchableFields.Count; index++)
         {
-            var field = barcodeFields[index];
+            var field = searchableFields[index];
             if (string.IsNullOrWhiteSpace(field))
             {
                 continue;
             }
 
             var quotedBarcodeField = QuoteIdentifier(field);
+            var isBarcodeField = normalizedBarcodeFields.Contains(field, StringComparer.OrdinalIgnoreCase);
+            var candidateBarcodeExpression = isBarcodeField
+                ? $"CAST(p.{quotedBarcodeField} AS NVARCHAR(100))"
+                : preferredBarcodeExpression;
+
             if (hasAnyField)
             {
                 unionSql.AppendLine("UNION ALL");
@@ -489,9 +603,11 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 SELECT
                     p.ptypeid AS ProductId,
                     p.{_productNameField} AS ProductName,
+                    {productCodeExpression} AS ProductCode,
+                    {productShortCodeExpression} AS ProductShortCode,
                     {specificationExpression} AS Specification,
                     {priceExpression} AS Price,
-                    CAST(p.{quotedBarcodeField} AS NVARCHAR(100)) AS Barcode,
+                    {candidateBarcodeExpression} AS Barcode,
                     @MatchedBy{index} AS BarcodeMatchedBy,
                     {index} AS FieldRank,
                     CASE
@@ -501,6 +617,7 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 FROM {_quotedProductTable} AS p
                 {priceJoin}
                 WHERE CAST(p.{quotedBarcodeField} AS NVARCHAR(100)) LIKE @ContainsPattern ESCAPE '\'
+                  AND NULLIF(LTRIM(RTRIM({candidateBarcodeExpression})), N'') IS NOT NULL
                 """);
 
             parameters.Add($"MatchedBy{index}", field);
@@ -520,6 +637,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
                 SELECT
                     ProductId,
                     ProductName,
+                    ProductCode,
+                    ProductShortCode,
                     Specification,
                     Price,
                     Barcode,
@@ -534,6 +653,8 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             )
             SELECT TOP (@Limit)
                 ProductName,
+                ProductCode,
+                ProductShortCode,
                 Specification,
                 Price,
                 Barcode,
@@ -558,6 +679,34 @@ public sealed class SwcsProductLookupRepository : ISwcsProductLookupRepository
             parameters,
             commandTimeout: _queryTimeoutSeconds,
             cancellationToken: cancellationToken);
+    }
+
+    private static string BuildOptionalTextFieldExpression(
+        IReadOnlySet<string> columns,
+        string productAlias,
+        string fieldName,
+        int length)
+    {
+        if (!columns.Contains(fieldName))
+        {
+            return $"CAST(N'' AS NVARCHAR({length}))";
+        }
+
+        return $"CAST(ISNULL({productAlias}.{QuoteIdentifier(fieldName)}, N'') AS NVARCHAR({length}))";
+    }
+
+    private static string BuildPreferredBarcodeExpression(string productAlias, IReadOnlyList<string> barcodeFields)
+    {
+        if (barcodeFields.Count == 0)
+        {
+            return "CAST(N'' AS NVARCHAR(100))";
+        }
+
+        var candidates = barcodeFields
+            .Select(field => $"NULLIF(CAST({productAlias}.{QuoteIdentifier(field)} AS NVARCHAR(100)), N'')")
+            .ToList();
+
+        return $"CAST(COALESCE({string.Join(", ", candidates)}, N'') AS NVARCHAR(100))";
     }
 
     private string BuildSpecificationExpression(string? specificationField)

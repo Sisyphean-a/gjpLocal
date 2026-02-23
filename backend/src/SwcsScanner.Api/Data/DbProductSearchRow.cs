@@ -4,6 +4,10 @@ public sealed class DbProductSearchRow
 {
     public string ProductName { get; init; } = string.Empty;
 
+    public string ProductCode { get; init; } = string.Empty;
+
+    public string ProductShortCode { get; init; } = string.Empty;
+
     public string? Specification { get; init; }
 
     public decimal Price { get; init; }

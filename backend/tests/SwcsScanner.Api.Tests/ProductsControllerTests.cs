@@ -27,7 +27,7 @@ public sealed class ProductsControllerTests
         {
             SearchResults =
             [
-                new ProductSearchItemResult("雪碧", "500ml", 3m, "6901028075803", "Barcode")
+                new ProductSearchItemResult("雪碧", "08093", "xb", "500ml", 3m, "6901028075803", "Barcode")
             ]
         };
         var controller = new ProductsController(service);
@@ -38,6 +38,8 @@ public sealed class ProductsControllerTests
         var payload = Assert.IsType<ProductSearchResponse>(ok.Value);
         Assert.Equal(1, payload.Count);
         Assert.Equal("6901028075803", payload.Items[0].Barcode);
+        Assert.Equal("08093", payload.Items[0].ProductCode);
+        Assert.Equal("xb", payload.Items[0].ProductShortCode);
     }
 
     private sealed class FakeProductLookupService : IProductLookupService

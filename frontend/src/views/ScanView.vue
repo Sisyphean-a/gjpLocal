@@ -330,7 +330,7 @@ async function initializeScanner(forceRestart = false): Promise<void> {
 }
 
 function normalizeManualKeyword(value: string): string {
-  return value.replace(/\s+/g, '').trim()
+  return value.trim()
 }
 
 async function submitManualQuery(): Promise<void> {
@@ -342,7 +342,7 @@ async function submitManualQuery(): Promise<void> {
   if (keyword.length < 2) {
     state.value = 'error'
     statusText.value = '查询失败'
-    errorMessage.value = '请输入至少 2 位条码关键字。'
+    errorMessage.value = '请输入至少 2 位关键字（条码/商品全名/缩写码）。'
     await playErrorTone()
     return
   }
@@ -367,7 +367,7 @@ async function submitManualQuery(): Promise<void> {
     if (items.length === 0) {
       state.value = 'error'
       statusText.value = '查询失败'
-      errorMessage.value = '未找到匹配条码，请输入更多位数。'
+      errorMessage.value = '未找到匹配商品，请尝试条码、商品全名或缩写码。'
       await playErrorTone()
       return
     }
@@ -547,7 +547,7 @@ onBeforeUnmount(async () => {
         class="scan-manual-input"
         type="text"
         maxlength="64"
-        placeholder="输入完整条码或后六码"
+        placeholder="输入条码/商品全名/缩写码"
         @keyup.enter="submitManualQuery"
       >
       <button
@@ -570,7 +570,10 @@ onBeforeUnmount(async () => {
         @click="selectManualCandidate(item.barcode)"
       >
         <span class="scan-candidate-name">{{ item.productName }}</span>
-        <span class="scan-candidate-meta">{{ item.barcode }}</span>
+        <span class="scan-candidate-meta">
+          编号：{{ item.productCode || '-' }} | 缩写码：{{ item.productShortCode || '-' }}
+        </span>
+        <span class="scan-candidate-meta">条码：{{ item.barcode }}</span>
         <span class="scan-candidate-price">￥{{ item.price.toFixed(2) }}</span>
       </button>
     </section>
@@ -601,6 +604,9 @@ onBeforeUnmount(async () => {
           <p class="scan-product-name">{{ product.productName }}</p>
           <p class="scan-product-spec">{{ product.specification || '无规格' }}</p>
           <p class="scan-product-price">￥{{ product.price.toFixed(2) }}</p>
+          <p class="scan-result-meta">
+            商品编号：{{ product.productCode || '-' }} | 缩写码：{{ product.productShortCode || '-' }}
+          </p>
           <p class="scan-result-meta">匹配字段：{{ product.barcodeMatchedBy }}</p>
 
                     <button

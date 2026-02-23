@@ -6,6 +6,8 @@ export interface LoginResponse {
 
 export interface ProductLookupResponse {
   productName: string
+  productCode: string
+  productShortCode: string
   specification: string
   price: number
   barcodeMatchedBy: string
@@ -30,6 +32,8 @@ export interface ProductSearchResponse {
 
 export interface ProductSearchItemResponse {
   productName: string
+  productCode: string
+  productShortCode: string
   specification: string
   price: number
   barcode: string
