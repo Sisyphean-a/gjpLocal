@@ -2,6 +2,8 @@
 
 本项目用于门店局域网扫码查价，前端为移动端 H5，后端为 .NET 8 API。
 
+当前 API 版本：`/api/v2/*`
+
 ## 当前系统口径（已对齐）
 
 - 数据库：`dwpfbcs`
@@ -47,6 +49,24 @@ update-service.bat nobuild
 ```
 
 该脚本会自动执行：提权（UAC） -> 构建（可选） -> 发布后端 -> 更新服务配置 -> 重启服务。
+
+等价 PowerShell 入口（统一部署脚本）：
+
+```powershell
+.\ops\ps\deploy.ps1 -Operation Deploy -BuildFrontend -Environment Production
+```
+
+仅重启服务：
+
+```powershell
+.\ops\ps\deploy.ps1 -Operation Restart
+```
+
+回滚到最近一次备份：
+
+```powershell
+.\ops\ps\rollback.ps1
+```
 
 启动后访问：
 
@@ -116,6 +136,7 @@ restart-service.bat
 - 服务名：`SwcsScanner`
 - 默认发布目录：`C:\Services\SwcsScanner`
 - 启动类型：`Automatic`（开机自启）
+- 可回滚目录：`C:\Services\SwcsScanner\_rollback`
 
 ## 服务化后能否删除当前项目目录？
 

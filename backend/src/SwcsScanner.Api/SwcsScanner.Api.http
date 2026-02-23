@@ -1,6 +1,6 @@
 @SwcsScanner.Api_HostAddress = https://localhost:5001
 
-POST {{SwcsScanner.Api_HostAddress}}/api/auth/login
+POST {{SwcsScanner.Api_HostAddress}}/api/v2/auth/login
 Content-Type: application/json
 
 {
@@ -10,7 +10,7 @@ Content-Type: application/json
 
 ###
 
-GET {{SwcsScanner.Api_HostAddress}}/api/products/lookup?barcode=6925303714857
+GET {{SwcsScanner.Api_HostAddress}}/api/v2/products/lookup?barcode=6925303714857
 Accept: application/json
 Authorization: Bearer <replace_token>
 

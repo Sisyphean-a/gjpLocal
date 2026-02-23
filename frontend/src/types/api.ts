@@ -1,3 +1,11 @@
+export interface ApiEnvelope<T> {
+  code: string
+  message: string
+  data: T | null
+  traceId: string
+  details?: unknown
+}
+
 export interface LoginResponse {
   accessToken: string
   tokenType: string
@@ -5,14 +13,23 @@ export interface LoginResponse {
 }
 
 export interface ProductLookupResponse {
+  productId: string
   productName: string
   productCode: string
   productShortCode: string
   specification: string
   price: number
-  barcodeMatchedBy: string
+  matchedBy: string
+  pricingMeta: ProductPricingMetaResponse
   currentUnit: ProductLookupUnitResponse | null
   units: ProductLookupUnitResponse[]
+}
+
+export interface ProductPricingMetaResponse {
+  sourceTable: string
+  sourceField: string
+  unitScoped: boolean
+  priceTypeId: string | null
 }
 
 export interface ProductLookupUnitResponse {
@@ -37,7 +54,7 @@ export interface ProductSearchItemResponse {
   specification: string
   price: number
   barcode: string
-  barcodeMatchedBy: string
+  matchedBy: string
 }
 
 export interface ApiErrorResponse {

@@ -1,54 +1,74 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 using SwcsScanner.Api.Models.Responses;
+using SwcsScanner.Api.Options;
 using SwcsScanner.Api.Services;
 
 namespace SwcsScanner.Api.Controllers;
 
 [ApiController]
 [Authorize]
-[Route("api/[controller]")]
+[Route("api/v2/products")]
 public sealed class ProductsController : ControllerBase
 {
     private const int MinSearchKeywordLength = 2;
     private const int DefaultSearchLimit = 20;
 
     private readonly IProductLookupService _lookupService;
+    private readonly SwcsOptions _swcsOptions;
 
-    public ProductsController(IProductLookupService lookupService)
+    public ProductsController(IProductLookupService lookupService, IOptions<SwcsOptions> swcsOptions)
     {
         _lookupService = lookupService;
+        _swcsOptions = swcsOptions.Value;
     }
 
     [HttpGet("lookup")]
     [EnableRateLimiting("lookup")]
-    [ProducesResponseType<ProductLookupResponse>(StatusCodes.Status200OK)]
-    [ProducesResponseType<ApiErrorResponse>(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType<ApiErrorResponse>(StatusCodes.Status404NotFound)]
-    [ProducesResponseType<ApiErrorResponse>(StatusCodes.Status429TooManyRequests)]
-    public async Task<ActionResult<ProductLookupResponse>> Lookup(
+    [ProducesResponseType<ApiEnvelope<ProductLookupResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ApiEnvelope<object>>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ApiEnvelope<object>>(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ApiEnvelope<object>>(StatusCodes.Status429TooManyRequests)]
+    public async Task<ActionResult<ApiEnvelope<ProductLookupResponse>>> Lookup(
         [FromQuery] string barcode,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(barcode))
         {
-            return BadRequest(ApiErrorResponse.InvalidBarcode());
+            return BadRequest(ApiEnvelopeFactory.Failure(ApiErrorResponse.InvalidBarcode(), HttpContext.TraceIdentifier));
         }
 
         var result = await _lookupService.LookupAsync(barcode, cancellationToken);
         if (result is null)
         {
-            return NotFound(ApiErrorResponse.NotFoundBarcode(barcode));
+            return NotFound(ApiEnvelopeFactory.Failure(
+                ApiErrorResponse.NotFoundBarcode(barcode),
+                HttpContext.TraceIdentifier));
         }
 
-        return Ok(new ProductLookupResponse(
+        var pricingTable = string.IsNullOrWhiteSpace(_swcsOptions.PriceTable)
+            ? _swcsOptions.ProductTable
+            : _swcsOptions.PriceTable!;
+        var pricingField = string.IsNullOrWhiteSpace(_swcsOptions.PriceColumn)
+            ? string.Join(" | ", _swcsOptions.PriceFields)
+            : _swcsOptions.PriceColumn!;
+
+        var payload = new ProductLookupResponse(
+            result.ProductId,
             result.ProductName,
             result.ProductCode,
             result.ProductShortCode,
             result.Specification,
             result.Price,
-            result.BarcodeMatchedBy,
+            result.MatchedBy,
+            new ProductPricingMetaResponse(
+                pricingTable,
+                pricingField,
+                !string.IsNullOrWhiteSpace(_swcsOptions.BarcodeTable) &&
+                !string.IsNullOrWhiteSpace(_swcsOptions.PriceTable),
+                _swcsOptions.PriceTypeId),
             result.CurrentUnit is null
                 ? null
                 : new ProductLookupUnitResponse(
@@ -66,15 +86,17 @@ public sealed class ProductsController : ControllerBase
                     unit.Price,
                     unit.Barcodes,
                     unit.IsMatchedUnit))
-                .ToList()));
+                .ToList());
+
+        return Ok(ApiEnvelopeFactory.Success(payload, HttpContext.TraceIdentifier));
     }
 
     [HttpGet("search")]
     [EnableRateLimiting("lookup")]
-    [ProducesResponseType<ProductSearchResponse>(StatusCodes.Status200OK)]
-    [ProducesResponseType<ApiErrorResponse>(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType<ApiErrorResponse>(StatusCodes.Status429TooManyRequests)]
-    public async Task<ActionResult<ProductSearchResponse>> Search(
+    [ProducesResponseType<ApiEnvelope<ProductSearchResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ApiEnvelope<object>>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ApiEnvelope<object>>(StatusCodes.Status429TooManyRequests)]
+    public async Task<ActionResult<ApiEnvelope<ProductSearchResponse>>> Search(
         [FromQuery] string keyword,
         [FromQuery] int? limit,
         CancellationToken cancellationToken)
@@ -82,7 +104,9 @@ public sealed class ProductsController : ControllerBase
         var normalizedKeyword = keyword?.Trim() ?? string.Empty;
         if (normalizedKeyword.Length < MinSearchKeywordLength)
         {
-            return BadRequest(ApiErrorResponse.InvalidSearchKeyword(MinSearchKeywordLength));
+            return BadRequest(ApiEnvelopeFactory.Failure(
+                ApiErrorResponse.InvalidSearchKeyword(MinSearchKeywordLength),
+                HttpContext.TraceIdentifier));
         }
 
         var result = await _lookupService.SearchByBarcodeFragmentAsync(
@@ -98,9 +122,10 @@ public sealed class ProductsController : ControllerBase
                 item.Specification,
                 item.Price,
                 item.Barcode,
-                item.BarcodeMatchedBy))
+                item.MatchedBy))
             .ToList();
 
-        return Ok(new ProductSearchResponse(normalizedKeyword, items.Count, items));
+        var payload = new ProductSearchResponse(normalizedKeyword, items.Count, items);
+        return Ok(ApiEnvelopeFactory.Success(payload, HttpContext.TraceIdentifier));
     }
 }

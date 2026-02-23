@@ -8,6 +8,28 @@ namespace SwcsScanner.Api.Tests;
 public sealed class ProductLookupServiceTests
 {
     [Fact]
+    public void BuildCandidates_ShouldExpandGs1AndGtinVariants()
+    {
+        var builder = new BarcodeLookupCandidateBuilder();
+
+        var candidates = builder.Build("(01)06923644237943");
+
+        Assert.Equal(
+            ["(01)06923644237943", "0106923644237943", "06923644237943", "6923644237943"],
+            candidates);
+    }
+
+    [Fact]
+    public void BuildCandidates_ShouldAddLeadingZeroVariant_ForEan13()
+    {
+        var builder = new BarcodeLookupCandidateBuilder();
+
+        var candidates = builder.Build("6925303714857");
+
+        Assert.Equal(["6925303714857", "06925303714857"], candidates);
+    }
+
+    [Fact]
     public async Task LookupAsync_ShouldPreferDirectField_WhenMatched()
     {
         var repository = new FakeRepository
@@ -30,10 +52,57 @@ public sealed class ProductLookupServiceTests
         var result = await service.LookupAsync("6925303714857", CancellationToken.None);
 
         Assert.NotNull(result);
-        Assert.Equal("Standard", result!.BarcodeMatchedBy);
+        Assert.Equal("Standard", result!.MatchedBy);
         Assert.Equal("10001", result.ProductCode);
         Assert.Equal("kl", result.ProductShortCode);
         Assert.False(repository.FunctionLookupCalled);
+    }
+
+    [Fact]
+    public async Task LookupAsync_ShouldPreferBarcodeTable_WhenBarcodeTableAndFieldBothMatch()
+    {
+        var repository = new FakeRepository
+        {
+            Schema = BuildSchema(),
+            DirectLookupResults =
+            {
+                [""] = new DbProductLookupRow
+                {
+                    ProductName = "barcode-table-hit",
+                    ProductCode = "bt-001",
+                    ProductShortCode = "bt",
+                    Specification = "500ml",
+                    Price = 12.3m
+                },
+                ["Standard"] = new DbProductLookupRow
+                {
+                    ProductName = "field-hit",
+                    ProductCode = "fd-001",
+                    ProductShortCode = "fd",
+                    Specification = "500ml",
+                    Price = 9.9m
+                }
+            }
+        };
+
+        var service = CreateService(
+            repository,
+            new SwcsOptions
+            {
+                ProductTable = "dbo.Ptype",
+                SpecificationField = "Standard",
+                BarcodeFields = ["Standard", "Barcode"],
+                PriceFields = ["RetailPrice", "Price1"],
+                EnableFunctionFallback = true,
+                BarcodeTable = "dbo.PBarcode",
+                BarcodeColumn = "BarcodeTableColumn"
+            });
+
+        var result = await service.LookupAsync("6925303714857", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("BarcodeTableColumn", result!.MatchedBy);
+        Assert.Equal("bt-001", result.ProductCode);
     }
 
     [Fact]
@@ -55,7 +124,7 @@ public sealed class ProductLookupServiceTests
 
         Assert.NotNull(result);
         Assert.True(repository.FunctionLookupCalled);
-        Assert.Equal("fn_strunitptype(B)", result!.BarcodeMatchedBy);
+        Assert.Equal("fn_strunitptype(B)", result!.MatchedBy);
     }
 
     [Fact]
@@ -79,7 +148,13 @@ public sealed class ProductLookupServiceTests
         var result = await service.LookupAsync("6923644237943", CancellationToken.None);
 
         Assert.NotNull(result);
-        Assert.Equal("LegacyCompositeLike", result!.BarcodeMatchedBy);
+        Assert.Equal("LegacyCompositeLike", result!.MatchedBy);
+        Assert.True(repository.FunctionLookupCalled);
+        var firstCompositeIndex = repository.LookupCallTrace.FindIndex(call => call.StartsWith("composite:", StringComparison.Ordinal));
+        var lastFunctionIndex = repository.LookupCallTrace.FindLastIndex(call => call.StartsWith("function:", StringComparison.Ordinal));
+        Assert.True(firstCompositeIndex >= 0);
+        Assert.True(lastFunctionIndex >= 0);
+        Assert.True(firstCompositeIndex > lastFunctionIndex);
         Assert.Contains("6923644237943", repository.CompositeLookupKeywords);
     }
 
@@ -104,7 +179,7 @@ public sealed class ProductLookupServiceTests
         var result = await service.LookupAsync("(01)06923644237943", CancellationToken.None);
 
         Assert.NotNull(result);
-        Assert.Equal("LegacyCompositeLike", result!.BarcodeMatchedBy);
+        Assert.Equal("LegacyCompositeLike", result!.MatchedBy);
         Assert.Contains("6923644237943", repository.CompositeLookupKeywords);
     }
 
@@ -242,9 +317,11 @@ public sealed class ProductLookupServiceTests
         Assert.Equal(["Barcode"], repository.LastSearchBarcodeFields);
     }
 
-    private static ProductLookupService CreateService(ISwcsProductLookupRepository repository)
+    private static ProductLookupService CreateService(
+        ISwcsProductLookupRepository repository,
+        SwcsOptions? overrideOptions = null)
     {
-        var options = Microsoft.Extensions.Options.Options.Create(new SwcsOptions
+        var options = Microsoft.Extensions.Options.Options.Create(overrideOptions ?? new SwcsOptions
         {
             ProductTable = "dbo.Ptype",
             SpecificationField = "Standard",
@@ -281,6 +358,8 @@ public sealed class ProductLookupServiceTests
 
         public List<DbProductUnitRow> UnitRows { get; init; } = [];
 
+        public List<string> LookupCallTrace { get; } = [];
+
         public bool FunctionLookupCalled { get; private set; }
 
         public bool SearchCalled { get; private set; }
@@ -301,6 +380,7 @@ public sealed class ProductLookupServiceTests
             string? specificationField,
             CancellationToken cancellationToken)
         {
+            LookupCallTrace.Add($"field:{barcodeField}:{barcode}");
             DirectLookupResults.TryGetValue(barcodeField, out var result);
             return Task.FromResult(result);
         }
@@ -312,6 +392,7 @@ public sealed class ProductLookupServiceTests
             CancellationToken cancellationToken)
         {
             FunctionLookupCalled = true;
+            LookupCallTrace.Add($"function:{barcode}");
             return Task.FromResult(FunctionLookupResult);
         }
 
@@ -321,6 +402,7 @@ public sealed class ProductLookupServiceTests
             string? specificationField,
             CancellationToken cancellationToken)
         {
+            LookupCallTrace.Add($"composite:{keyword}");
             CompositeLookupKeywords.Add(keyword);
             CompositeLookupResults.TryGetValue(keyword, out var result);
             return Task.FromResult(result);

@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { isAxiosError } from 'axios'
 import { api } from '../services/api'
 import { saveSession } from '../services/auth'
-import type { ApiErrorResponse, LoginResponse } from '../types/api'
+import type { ApiEnvelope, LoginResponse } from '../types/api'
 
 const router = useRouter()
 const username = ref('user01')
@@ -21,15 +21,20 @@ async function submitLogin(): Promise<void> {
 
   loading.value = true
   try {
-    const response = await api.post<LoginResponse>('/api/auth/login', {
+    const response = await api.post<ApiEnvelope<LoginResponse>>('/api/v2/auth/login', {
       username: username.value.trim(),
       password: password.value,
     })
 
-    saveSession(response.data.accessToken, response.data.expiresAtUtc, username.value.trim())
+    if (!response.data.data) {
+      errorMessage.value = '登录失败，请稍后重试。'
+      return
+    }
+
+    saveSession(response.data.data.accessToken, response.data.data.expiresAtUtc, username.value.trim())
     await router.replace({ name: 'scan' })
   } catch (error) {
-    if (isAxiosError<ApiErrorResponse>(error) && error.response?.data?.message) {
+    if (isAxiosError<ApiEnvelope<unknown>>(error) && error.response?.data?.message) {
       errorMessage.value = error.response.data.message
     } else {
       errorMessage.value = '登录失败，请检查网络连接。'

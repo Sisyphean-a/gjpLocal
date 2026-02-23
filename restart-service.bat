@@ -17,7 +17,7 @@ if /I not "%~1"=="--elevated" (
   )
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Restart-Service -Name 'SwcsScanner' -ErrorAction Stop } catch { Write-Error $_; exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\ops\ps\deploy.ps1" -Operation Restart -ServiceName SwcsScanner
 if errorlevel 1 (
   echo.
   echo [SWCS] Service restart failed. Press any key to exit.

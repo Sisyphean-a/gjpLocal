@@ -7,7 +7,7 @@ import { api } from '../services/api'
 import { clearSession, getCurrentUsername } from '../services/auth'
 import { playErrorTone, playSuccessTone } from '../services/sound'
 import type {
-  ApiErrorResponse,
+  ApiEnvelope,
   ProductLookupResponse,
   ProductSearchItemResponse,
   ProductSearchResponse,
@@ -359,11 +359,11 @@ async function submitManualQuery(): Promise<void> {
   currentBarcode.value = keyword
 
   try {
-    const response = await api.get<ProductSearchResponse>('/api/products/search', {
+    const response = await api.get<ApiEnvelope<ProductSearchResponse>>('/api/v2/products/search', {
       params: { keyword, limit: 20 },
     })
 
-    const items = response.data.items ?? []
+    const items = response.data.data?.items ?? []
     if (items.length === 0) {
       state.value = 'error'
       statusText.value = '查询失败'
@@ -394,7 +394,7 @@ async function submitManualQuery(): Promise<void> {
     console.error(`${scanLogPrefix} manual search failed`, error)
     state.value = 'error'
     statusText.value = '查询失败'
-    if (isAxiosError<ApiErrorResponse>(error) && error.response?.data?.message) {
+    if (isAxiosError<ApiEnvelope<unknown>>(error) && error.response?.data?.message) {
       errorMessage.value = error.response.data.message
     } else {
       errorMessage.value = '查询失败，请稍后重试。'
@@ -446,11 +446,14 @@ async function onScanSuccess(
   }
 
   try {
-    const response = await api.get<ProductLookupResponse>('/api/products/lookup', {
+    const response = await api.get<ApiEnvelope<ProductLookupResponse>>('/api/v2/products/lookup', {
       params: { barcode },
     })
 
-    product.value = response.data
+    product.value = response.data.data
+    if (!product.value) {
+      throw new Error('lookup payload missing data')
+    }
     errorMessage.value = ''
     state.value = 'success'
     statusText.value = '查询成功'
@@ -460,7 +463,7 @@ async function onScanSuccess(
     product.value = null
     state.value = 'error'
     statusText.value = '查询失败'
-    if (isAxiosError<ApiErrorResponse>(error) && error.response?.data?.message) {
+    if (isAxiosError<ApiEnvelope<unknown>>(error) && error.response?.data?.message) {
       errorMessage.value = error.response.data.message
     } else {
       errorMessage.value = '网络异常，请检查主机服务和 WiFi 连接。'
@@ -564,7 +567,7 @@ onBeforeUnmount(async () => {
       <p class="scan-candidates-title">找到 {{ manualCandidates.length }} 条候选，请点选：</p>
       <button
         v-for="item in manualCandidates"
-        :key="`${item.barcodeMatchedBy}-${item.barcode}`"
+        :key="`${item.matchedBy}-${item.barcode}`"
         type="button"
         class="scan-candidate-item"
         @click="selectManualCandidate(item.barcode)"
@@ -607,7 +610,7 @@ onBeforeUnmount(async () => {
           <p class="scan-result-meta">
             商品编号：{{ product.productCode || '-' }} | 缩写码：{{ product.productShortCode || '-' }}
           </p>
-          <p class="scan-result-meta">匹配字段：{{ product.barcodeMatchedBy }}</p>
+          <p class="scan-result-meta">匹配字段：{{ product.matchedBy }}</p>
 
                     <button
             v-if="hasMultipleUnits"

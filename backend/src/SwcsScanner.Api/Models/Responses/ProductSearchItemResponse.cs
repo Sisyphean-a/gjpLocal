@@ -7,4 +7,4 @@ public sealed record ProductSearchItemResponse(
     string Specification,
     decimal Price,
     string Barcode,
-    string BarcodeMatchedBy);
+    string MatchedBy);

@@ -7,7 +7,7 @@ using SwcsScanner.Api.Services;
 namespace SwcsScanner.Api.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/v2/auth")]
 public sealed class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
@@ -21,17 +21,20 @@ public sealed class AuthController : ControllerBase
 
     [HttpPost("login")]
     [AllowAnonymous]
-    [ProducesResponseType<LoginResponse>(StatusCodes.Status200OK)]
-    [ProducesResponseType<ApiErrorResponse>(StatusCodes.Status401Unauthorized)]
-    public ActionResult<LoginResponse> Login([FromBody] LoginRequest request)
+    [ProducesResponseType<ApiEnvelope<LoginResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ApiEnvelope<object>>(StatusCodes.Status401Unauthorized)]
+    public ActionResult<ApiEnvelope<LoginResponse>> Login([FromBody] LoginRequest request)
     {
         var user = _authService.Authenticate(request.Username, request.Password);
         if (user is null)
         {
-            return Unauthorized(ApiErrorResponse.InvalidCredential());
+            return Unauthorized(ApiEnvelopeFactory.Failure(
+                ApiErrorResponse.InvalidCredential(),
+                HttpContext.TraceIdentifier));
         }
 
         var token = _tokenService.GenerateToken(user);
-        return Ok(new LoginResponse(token.AccessToken, "Bearer", token.ExpiresAtUtc));
+        var payload = new LoginResponse(token.AccessToken, "Bearer", token.ExpiresAtUtc);
+        return Ok(ApiEnvelopeFactory.Success(payload, HttpContext.TraceIdentifier));
     }
 }
