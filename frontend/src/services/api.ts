@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { clearSession, getAccessToken } from './auth'
+import { isAuthRequired } from './sessionPolicy'
 
 const baseURL = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 
@@ -22,7 +23,9 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       clearSession()
-      window.location.replace('/login')
+      if (isAuthRequired() && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.replace('/login')
+      }
     }
 
     return Promise.reject(error)

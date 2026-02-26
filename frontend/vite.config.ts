@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import fs from 'node:fs'
@@ -30,6 +31,20 @@ export default defineConfig(({ mode }) => {
           secure: false,
         },
       },
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-vue': ['vue', 'vue-router', 'axios'],
+            'vendor-scanner': ['html5-qrcode'],
+          },
+        },
+      },
+    },
+    test: {
+      environment: 'happy-dom',
+      include: ['src/**/*.test.ts'],
     },
   }
 })

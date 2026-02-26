@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import LoginView from '../views/LoginView.vue'
-import ScanView from '../views/ScanView.vue'
-import { hasValidSession } from '../services/auth'
+import { canAccessScan, shouldRedirectFromLogin } from '../services/sessionPolicy'
+
+const LoginView = () => import('../views/LoginView.vue')
+const ScanView = () => import('../views/ScanView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -26,11 +27,11 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  if (to.meta.requiresAuth && !hasValidSession()) {
+  if (to.meta.requiresAuth && !canAccessScan()) {
     return { name: 'login' }
   }
 
-  if (to.meta.guestOnly && hasValidSession()) {
+  if (to.meta.guestOnly && shouldRedirectFromLogin()) {
     return { name: 'scan' }
   }
 
